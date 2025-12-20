@@ -1,15 +1,7 @@
 version: '3.3'
 services:
-  waha:
-    image: devlikeapro/waha:arm
-    restart: always
-    environment:
-      - WAHA_API_KEY=secret_api_key_123
-      - WAHA_DASHBOARD_USERNAME=admin
-      - WAHA_DASHBOARD_PASSWORD=secret_password_123
-      - WHATSAPP_API_SCHEMA=https
-      - WAHA_PRINT_QR=false
-    ports:
-      - "3001:3000"
-    volumes:
-      - ./waha-data:/app/sessions
+version: '3.3'
+services:
+  # App service will be added here if needed for local docker development
+  # using the Dockerfile we just created.
+

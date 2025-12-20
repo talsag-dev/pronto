@@ -291,9 +291,21 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
                         </p>
                         <p className="text-xs text-slate-400 truncate">Status: {lead.status}</p>
                       </div>
-                      <span className="ml-auto text-[10px] text-slate-300 whitespace-nowrap self-start">
-                        {new Date(lead.created_at).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}
-                      </span>
+                      
+                      <div className="flex flex-col items-end gap-1 ml-auto self-center">
+                          <span className="text-[10px] text-slate-300 whitespace-nowrap">
+                            {new Date(lead.created_at).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}
+                          </span>
+                          <button 
+                             onClick={(e) => {
+                                 e.stopPropagation();
+                                 setSelectedLead(lead);
+                             }}
+                             className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-semibold rounded-full transition-colors"
+                          >
+                             Chat
+                          </button>
+                      </div>
                     </div>
                   ))}
                   {leads.length === 0 && (

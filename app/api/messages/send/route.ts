@@ -42,6 +42,16 @@ export async function POST(request: Request) {
       // metadata: { source: 'manual' } // Optional: track this was manual
     });
 
+    // 5. Auto-Pause AI for this lead
+    const { error: updateError } = await supabase
+      .from('leads')
+      .update({ ai_status: 'paused' })
+      .eq('id', leadId);
+      
+    if (updateError) {
+        console.error('Failed to auto-pause AI for lead:', updateError);
+    }
+
     if (dbError) {
         console.error('Failed to save manual message:', dbError);
     }

@@ -82,22 +82,37 @@ function attachHandler(sock: WASocket, handler: (from: string, message: string, 
       
       console.log(`[BAILEYS] Processing msg from=${from} isFromMe=${isFromMe} type=${type}`);
 
-      // Filter out old messages (older than 1 hour) 
+      // Filter out old messages (older than 24 hours) 
       // This prevents processing entire history syncs as new activity
       if (msg.messageTimestamp) {
-        const messageTime = (typeof msg.messageTimestamp === 'number' 
-          ? msg.messageTimestamp 
-          : (typeof msg.messageTimestamp === 'object' && 'toNumber' in msg.messageTimestamp)
-            ? (msg.messageTimestamp as any).toNumber()
-            : (msg.messageTimestamp as any).low || Number(msg.messageTimestamp)) * 1000;
-        
-        // Log timestamp for debugging
-        const date = new Date(messageTime);
-        console.log(`[BAILEYS] Msg timestamp: ${date.toISOString()} (Now: ${new Date().toISOString()})`);
+        let messageTime = 0;
+        const ts = msg.messageTimestamp;
 
-        if (Date.now() - messageTime > 60 * 60 * 1000) {
-          console.log('[BAILEYS] Skipping old message');
-          continue;
+        if (typeof ts === 'number') {
+          messageTime = ts * 1000;
+        } else if (typeof ts === 'string') {
+          messageTime = parseInt(ts) * 1000;
+        } else if (typeof ts === 'object') {
+           // Handle Long object (low/high/unsigned) or generic object
+           if ('toNumber' in ts && typeof (ts as any).toNumber === 'function') {
+             messageTime = (ts as any).toNumber() * 1000;
+           } else if ('low' in ts) {
+             messageTime = (ts as any).low * 1000;
+           } else {
+             messageTime = Number(ts) * 1000;
+           }
+        }
+
+        // Validate calculated time
+        if (messageTime > 0) {
+           const date = new Date(messageTime);
+           console.log(`[BAILEYS] Msg timestamp: ${date.toISOString()} (Now: ${new Date().toISOString()})`);
+           
+           // Use 24 hour window to be safe against timezone/sync delays
+           if (Date.now() - messageTime > 24 * 60 * 60 * 1000) {
+             console.log('[BAILEYS] Skipping old message');
+             continue;
+           }
         }
       }
 
