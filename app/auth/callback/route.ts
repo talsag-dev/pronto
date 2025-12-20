@@ -32,10 +32,12 @@ export async function GET(request: Request) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) {
       console.error('Auth code exchange error:', error);
-      return NextResponse.redirect(new URL('/', requestUrl.origin));
+      const origin = process.env.NEXT_PUBLIC_APP_URL || requestUrl.origin;
+      return NextResponse.redirect(`${origin}/`);
     }
   }
 
   // URL to redirect to after sign in process completes
-  return NextResponse.redirect(new URL(next, requestUrl.origin));
+  const origin = process.env.NEXT_PUBLIC_APP_URL || requestUrl.origin;
+  return NextResponse.redirect(`${origin}${next}`);
 }
