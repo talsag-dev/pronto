@@ -222,6 +222,9 @@ export async function getOrCreateSession(orgId: string, forceNew: boolean = fals
       const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
       console.log(`[BAILEYS] Connection closed for ${orgId}, reconnecting:`, shouldReconnect);
       
+      // Update DB status
+      await updateDbStatus(orgId, 'disconnected');
+      
       if (shouldReconnect) {
         sessions.delete(orgId);
         await getOrCreateSession(orgId);
@@ -229,10 +232,13 @@ export async function getOrCreateSession(orgId: string, forceNew: boolean = fals
         sessions.delete(orgId);
         sessionStates.delete(orgId); // Clear state on logout
         sessionStates.set(orgId, { status: 'logged_out' });
+        await updateDbStatus(orgId, 'logged_out');
       }
     } else if (connection === 'open') {
       console.log(`[BAILEYS] Connected for ${orgId}`);
       sessionStates.set(orgId, { status: 'connected' });
+      // Update DB status
+      await updateDbStatus(orgId, 'connected');
     }
   });
 
