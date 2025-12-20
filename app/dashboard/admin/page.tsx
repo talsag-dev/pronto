@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Card, Title, Text, Badge, Button, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from '@tremor/react';
+import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from '@tremor/react';
+import { useRouter } from 'next/navigation';
 
 interface Organization {
   id: string;
@@ -13,9 +14,29 @@ interface Organization {
 }
 
 export default function AdminDashboard() {
+  const router = useRouter();
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [authorized, setAuthorized] = useState(false);
+
+  // Check authorization
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch('/api/admin/check-auth');
+        const data = await res.json();
+        if (!data.authorized) {
+          router.push('/dashboard');
+        } else {
+          setAuthorized(true);
+        }
+      } catch (e) {
+        router.push('/dashboard');
+      }
+    };
+    checkAuth();
+  }, [router]);
 
   const fetchStatus = async () => {
     try {
@@ -58,6 +79,16 @@ export default function AdminDashboard() {
         alert(`❌ Failed to reset: ${e.message}`);
     }
   };
+
+  if (!authorized) {
+    return (
+      <div className="p-6">
+        <Card>
+          <Text>Checking authorization...</Text>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">
