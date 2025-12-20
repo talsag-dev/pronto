@@ -1,7 +1,0 @@
-version: '3.3'
-services:
-version: '3.3'
-services:
-  # App service will be added here if needed for local docker development
-  # using the Dockerfile we just created.
-
