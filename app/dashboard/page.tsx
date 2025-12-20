@@ -39,18 +39,41 @@ export default async function DashboardPage() {
   }
   
   // 2. Fetch User's Organization
-  const { data: org } = await supabaseAdmin
+  let { data: org } = await supabaseAdmin
     .from('organizations')
     .select('*')
     .single(); // Just grab the first one for now
 
+  // Auto-create organization if it doesn't exist
   if (!org) {
-    return (
-      <div className="p-10 text-center">
-        <h1 className="text-2xl font-bold">No Organization Found</h1>
-        <p>Please create an Organization in Supabase first.</p>
-      </div>
-    );
+    console.log(`[DASHBOARD] No organization found for user ${user.id}, creating one...`);
+    
+    const { data: newOrg, error } = await supabaseAdmin
+      .from('organizations')
+      .insert({
+        name: user.email?.split('@')[0] || 'My Business',
+        business_phone: null,
+        config: {
+          system_prompt: "You are a helpful AI assistant for my business.",
+          operating_hours: "09:00-18:00"
+        },
+        integrations: {}
+      })
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('[DASHBOARD] Failed to create organization:', error);
+      return (
+        <div className="p-10 text-center">
+          <h1 className="text-2xl font-bold">Error Creating Organization</h1>
+          <p>{error.message}</p>
+        </div>
+      );
+    }
+    
+    org = newOrg;
+    console.log(`[DASHBOARD] Created organization ${org.id} for user ${user.id}`);
   }
 
   // 3. Fetch Leads Scoped to Org

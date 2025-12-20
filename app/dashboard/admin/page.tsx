@@ -43,14 +43,19 @@ export default function AdminDashboard() {
   }, []);
 
   const resetConnection = async (orgId: string) => {
-    if (!confirm('Are you sure you want to reset the connection? This will require re-scanning QR code.')) return;
+    if (!confirm('Are you sure you want to reset the connection?\n\nThis will:\n1. Close the active WhatsApp connection\n2. Delete all session data\n3. Require re-scanning QR code')) return;
     
     try {
-        await fetch(`/api/whatsapp/session?orgId=${orgId}`, { method: 'DELETE' });
-        alert('Session reset. Please re-scan QR code in settings.');
+        const res = await fetch(`/api/whatsapp/session?orgId=${orgId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+          alert('✅ Session terminated successfully!\n\nYou can now generate a new QR code in Settings.');
+        } else {
+          alert(`❌ Error: ${data.error}`);
+        }
         fetchStatus();
-    } catch (e) {
-        alert('Failed to reset');
+    } catch (e: any) {
+        alert(`❌ Failed to reset: ${e.message}`);
     }
   };
 

@@ -65,6 +65,38 @@ async function clearAuthState(orgId: string): Promise<void> {
   }
 }
 
+/**
+ * Terminate an active session (close socket and remove from memory)
+ */
+export async function terminateSession(orgId: string): Promise<void> {
+  try {
+    // Get the active socket
+    const sock = sessions.get(orgId);
+    
+    if (sock) {
+      // Close the socket connection
+      await sock.logout();
+      console.log(`[BAILEYS] Logged out session for ${orgId}`);
+    }
+    
+    // Remove from all maps
+    sessions.delete(orgId);
+    sessionStates.delete(orgId);
+    messageHandlers.delete(orgId);
+    
+    // Clear database
+    await clearAuthState(orgId);
+    
+    // Update DB status
+    await updateDbStatus(orgId, 'logged_out');
+    
+    console.log(`[BAILEYS] Terminated session for ${orgId}`);
+  } catch (error) {
+    console.error(`[BAILEYS] Error terminating session for ${orgId}:`, error);
+    throw error;
+  }
+}
+
 // Helper to attach handler to socket
 function attachHandler(sock: WASocket, handler: (from: string, message: string, isFromMe: boolean) => Promise<void>) {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {

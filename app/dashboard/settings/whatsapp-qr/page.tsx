@@ -30,9 +30,10 @@ export default function WhatsAppQRSettings() {
   };
 
   // Check status on mount in case already connected
-  useEffect(() => {
-    checkStatus();
-  }, []);
+  // Commented out to allow QR regeneration even if in-memory state shows connected
+  // useEffect(() => {
+  //   checkStatus();
+  // }, []);
 
   // Auto-redirect when connected
   useEffect(() => {
