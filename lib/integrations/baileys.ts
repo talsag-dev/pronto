@@ -68,8 +68,8 @@ async function clearAuthState(orgId: string): Promise<void> {
 // Helper to attach handler to socket
 function attachHandler(sock: WASocket, handler: (from: string, message: string, isFromMe: boolean) => Promise<void>) {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    // Only process notify (new messages) or append (synced messages)
-    if (type !== 'notify' && type !== 'append') return;
+    // Log for debugging
+    console.log(`[BAILEYS] messages.upsert type=${type} count=${messages.length}`);
 
     for (const msg of messages) {
       // Ignore broadcast and status messages
@@ -79,14 +79,24 @@ function attachHandler(sock: WASocket, handler: (from: string, message: string, 
 
       const from = msg.key.remoteJid!;
       const isFromMe = msg.key.fromMe || false;
+      
+      console.log(`[BAILEYS] Processing msg from=${from} isFromMe=${isFromMe} type=${type}`);
 
-      // Filter out old messages (older than 5 minutes) to prevent handling history syncs as new activity
+      // Filter out old messages (older than 1 hour) 
+      // This prevents processing entire history syncs as new activity
       if (msg.messageTimestamp) {
         const messageTime = (typeof msg.messageTimestamp === 'number' 
           ? msg.messageTimestamp 
-          : (msg.messageTimestamp as any).low || msg.messageTimestamp) * 1000;
+          : (typeof msg.messageTimestamp === 'object' && 'toNumber' in msg.messageTimestamp)
+            ? (msg.messageTimestamp as any).toNumber()
+            : (msg.messageTimestamp as any).low || Number(msg.messageTimestamp)) * 1000;
         
-        if (Date.now() - messageTime > 5 * 60 * 1000) {
+        // Log timestamp for debugging
+        const date = new Date(messageTime);
+        console.log(`[BAILEYS] Msg timestamp: ${date.toISOString()} (Now: ${new Date().toISOString()})`);
+
+        if (Date.now() - messageTime > 60 * 60 * 1000) {
+          console.log('[BAILEYS] Skipping old message');
           continue;
         }
       }
@@ -96,7 +106,10 @@ function attachHandler(sock: WASocket, handler: (from: string, message: string, 
                          '';
 
       if (messageText) {
+        console.log(`[BAILEYS] Passing to handler: ${messageText.substring(0, 20)}...`);
         await handler(from, messageText, isFromMe);
+      } else {
+        console.log('[BAILEYS] No message text found');
       }
     }
   });
