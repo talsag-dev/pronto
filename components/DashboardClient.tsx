@@ -87,7 +87,7 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
   };
 
   return (
-    <main className="h-full w-full overflow-hidden bg-slate-50/50 p-6 md:p-12">
+    <main className="h-full w-full md:overflow-hidden bg-slate-50/50 p-6 md:p-12">
       <motion.div 
         variants={container}
         initial="hidden"
