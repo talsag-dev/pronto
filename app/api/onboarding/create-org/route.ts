@@ -44,6 +44,7 @@ export async function POST(request: Request) {
     const { data: org, error } = await supabaseAdmin
       .from('organizations')
       .insert({
+        owner_id: user.id,
         name: businessName,
         business_phone: '000000000000', // Placeholder until WhatsApp connected
         config: {

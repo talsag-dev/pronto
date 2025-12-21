@@ -42,7 +42,8 @@ export default async function DashboardPage() {
   const { data: org } = await supabaseAdmin
     .from('organizations')
     .select('*')
-    .single(); // Just grab the first one for now
+    .eq('owner_id', user.id)
+    .single();
 
   // Redirect to onboarding if no organization exists
   if (!org) {
