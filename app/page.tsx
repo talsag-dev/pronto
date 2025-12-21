@@ -18,6 +18,14 @@ export default function LandingPage() {
 
   // Check if user is already logged in
   useEffect(() => {
+    // Check for auth code in URL (handle malformed redirects)
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    if (code) {
+      router.push(`/auth/callback?code=${code}&next=/dashboard`);
+      return;
+    }
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
         router.push('/dashboard');
@@ -253,7 +261,7 @@ function AuthForm({ loading, setLoading, supabase, router }: {
           email,
           password,
           options: {
-            emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
         if (error) throw error;
