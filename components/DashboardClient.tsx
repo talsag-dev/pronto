@@ -16,12 +16,7 @@ const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-const funnelData = [
-  { stage: 'Leads', count: 24 },
-  { stage: 'Qualified', count: 12 },
-  { stage: 'Meetings', count: 3 },
-  { stage: 'Closed', count: 1 },
-];
+
 
 export default function DashboardClient({ leads = [], user: initialUser, whatsappStatus: initialStatus = 'not_started' }: { leads: any[], user?: any, whatsappStatus?: string }) {
   const router = useRouter();
@@ -74,8 +69,8 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
   };
 
   // Calculate specific metrics from real data if available, falling back to mock
-  const totalLeads = leads.length || 24;
-  const newLeads = leads.filter(l => l.status === 'new').length || 12;
+  const totalLeads = leads.length;
+  const newLeads = leads.filter(l => l.status === 'new').length;
 
   // Animation variants
   const container = {
@@ -178,11 +173,9 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
                   <Users size={24} />
                 </div>
               </div>
-              <div className="mt-auto pt-4 flex items-center text-sm text-green-600 font-medium whitespace-nowrap">
-                 <div className="bg-green-50 px-2 py-1 rounded-md">
-                   +12% vs last week
-                 </div>
-              </div>
+               <div className="mt-auto pt-4 flex items-center text-sm text-slate-400 font-medium whitespace-nowrap">
+                  <span>Track your leads growth</span>
+               </div>
             </Card>
           </motion.div>
 
@@ -208,14 +201,14 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
                <div className="flex items-center justify-between">
                 <div>
                    <Text className="text-slate-500 font-medium">Meetings Booked</Text>
-                   <Metric className="text-slate-900 text-4xl mt-2">3</Metric>
+                   <Metric className="text-slate-900 text-4xl mt-2">0</Metric>
                 </div>
                  <div className="h-12 w-12 bg-emerald-100/50 rounded-full flex items-center justify-center text-emerald-600 shrink-0">
                   <CalendarCheck size={24} />
                 </div>
               </div>
                <div className="mt-auto pt-4 flex items-center text-sm text-emerald-700 font-medium">
-                 <span>Next: Today, 14:00</span>
+                 <span>No meetings scheduled</span>
               </div>
             </Card>
           </motion.div>

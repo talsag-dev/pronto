@@ -34,16 +34,19 @@ const globalForBaileys = globalThis as unknown as {
   baileysSessions: Map<string, WASocket>;
   baileysStates: Map<string, any>;
   baileysMessageHandlers: Map<string, (from: string, message: string, isFromMe: boolean) => Promise<void>>;
+  recentlySentMessageIds: Set<string>;
 };
 
 const sessions = globalForBaileys.baileysSessions || new Map<string, WASocket>();
 const sessionStates = globalForBaileys.baileysStates || new Map<string, any>();
 const messageHandlers = globalForBaileys.baileysMessageHandlers || new Map<string, (from: string, message: string, isFromMe: boolean) => Promise<void>>();
+const recentlySentMessageIds = globalForBaileys.recentlySentMessageIds || new Set<string>();
 
 if (process.env.NODE_ENV !== 'production') {
   globalForBaileys.baileysSessions = sessions;
   globalForBaileys.baileysStates = sessionStates;
   globalForBaileys.baileysMessageHandlers = messageHandlers;
+  globalForBaileys.recentlySentMessageIds = recentlySentMessageIds;
 }
 
 /**
@@ -83,6 +86,7 @@ export async function terminateSession(orgId: string): Promise<void> {
     sessions.delete(orgId);
     sessionStates.delete(orgId);
     messageHandlers.delete(orgId);
+    // Note: We don't clear recentlySentMessageIds here as they might still be valid for a few seconds
     
     // Clear database
     await clearAuthState(orgId);
@@ -111,8 +115,17 @@ function attachHandler(sock: WASocket, handler: (from: string, message: string, 
 
       const from = msg.key.remoteJid!;
       const isFromMe = msg.key.fromMe || false;
+      const messageId = msg.key.id;
+
+      // Check if this is a message we just sent
+      if (messageId && recentlySentMessageIds.has(messageId)) {
+        console.log(`[BAILEYS] Ignoring self-sent message ID: ${messageId}`);
+        // Remove from set to keep it clean, though strictly not necessary if we rely on timeouts
+        recentlySentMessageIds.delete(messageId);
+        continue;
+      }
       
-      console.log(`[BAILEYS] Processing msg from=${from} isFromMe=${isFromMe} type=${type}`);
+      console.log(`[BAILEYS] Processing msg from=${from} isFromMe=${isFromMe} type=${type} id=${messageId}`);
 
       // Filter out old messages (older than 24 hours) 
       // This prevents processing entire history syncs as new activity
@@ -369,8 +382,19 @@ export async function sendMessage(orgId: string, to: string, message: string): P
   // Ensure number has @s.whatsapp.net suffix
   const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
   
-  await sock.sendMessage(jid, { text: message });
-  console.log(`[BAILEYS] Message sent from ${orgId} to ${to}`);
+  const sentMsg = await sock.sendMessage(jid, { text: message });
+  
+  if (sentMsg?.key?.id) {
+    const id = sentMsg.key.id;
+    recentlySentMessageIds.add(id);
+    
+    // Auto-remove after 60 seconds to prevent memory leaks
+    setTimeout(() => {
+      recentlySentMessageIds.delete(id);
+    }, 60000);
+  }
+  
+  console.log(`[BAILEYS] Message sent from ${orgId} to ${to} (ID: ${sentMsg?.key?.id})`);
 }
 
 /**
