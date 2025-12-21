@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { requestPairingCode, getSessionStatus } from '@/lib/integrations/baileys';
+import { requestPairingCode, getSessionStatus, setupMessageHandler } from '@/lib/integrations/baileys';
+import { handleIncomingMessage } from '@/lib/services/message-handler';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -19,6 +20,11 @@ export async function GET(request: Request) {
     }
 
     try {
+      // Ensure message handler is set up
+      await setupMessageHandler(orgId, async (from, message, isFromMe) => {
+        await handleIncomingMessage(orgId, from, message, isFromMe);
+      });
+
       const code = await requestPairingCode(orgId, phoneNumber);
       return NextResponse.json({ code });
     } catch (error: any) {

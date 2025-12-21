@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { getQRCode } from '@/lib/integrations/baileys';
+import { getQRCode, setupMessageHandler } from '@/lib/integrations/baileys';
+import { handleIncomingMessage } from '@/lib/services/message-handler';
 import QRCode from 'qrcode';
 
 export async function GET(request: Request) {
@@ -10,6 +11,11 @@ export async function GET(request: Request) {
     if (!org) return NextResponse.json({ error: 'No Org' }, { status: 404 });
 
     const orgId = org.id;
+
+    // Ensure message handler is set up
+    await setupMessageHandler(orgId, async (from, message, isFromMe) => {
+      await handleIncomingMessage(orgId, from, message, isFromMe);
+    });
 
     // Get QR code from Baileys
     const qrData = await getQRCode(orgId);
