@@ -10,8 +10,19 @@ export default async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
-  // 2. Unauthenticated User on Dashboard -> Redirect to Landing Page
-  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
+  // 2. Unauthenticated User on Protected Routes -> Redirect to Landing Page
+  // Allow access to landing page explicitly
+  if (request.nextUrl.pathname === '/') {
+    return response;
+  }
+
+  // Check if the path is an auth callback or other public path
+  if (request.nextUrl.pathname.startsWith('/auth/')) {
+    return response;
+  }
+
+  // Redirect unauthenticated users to landing page
+  if (!user) {
     return NextResponse.redirect(new URL('/', request.url));
   }
 
