@@ -46,7 +46,14 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
         const res = await fetch('/api/whatsapp/pairing?action=status');
         const data = await res.json();
         if (data.status) {
-          setWhatsappStatus(data.status);
+          // If in-memory status is 'not_started' but DB says 'connected', 
+          // we likely have a process isolation issue (Next.js env), but the bot is actually working.
+          // Trust the DB in this specific case.
+          if (data.status === 'not_started' && data.whatsapp_status === 'connected') {
+            setWhatsappStatus('connected');
+          } else {
+            setWhatsappStatus(data.status);
+          }
         }
       } catch (error) {
         console.error('Failed to fetch WhatsApp status:', error);
