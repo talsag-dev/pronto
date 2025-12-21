@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       .insert({
         owner_id: user.id,
         name: businessName,
-        business_phone: '000000000000', // Placeholder until WhatsApp connected
+        business_phone: `placeholder_${crypto.randomUUID()}`, // Placeholder until WhatsApp connected
         config: {
           system_prompt: "You are a helpful AI assistant for my business.",
           operating_hours: "09:00-18:00"
