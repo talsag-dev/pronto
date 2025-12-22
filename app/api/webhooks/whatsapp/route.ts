@@ -14,6 +14,7 @@ export async function POST(req: Request) {
     }
 
     const { orgId, message, type } = await req.json();
+    const whatsappMessageId = message?.key?.id;
 
     if (!orgId || !message) {
       return NextResponse.json({ error: 'Missing orgId or message' }, { status: 400 });
@@ -32,7 +33,7 @@ export async function POST(req: Request) {
       const pushName = msg.pushName || ''; // Extract pushName
       console.log(`[WEBHOOK] Processing msg from=${from} name=${pushName} isFromMe=${isFromMe}`);
       // Run in background to not block the worker
-      handleIncomingMessage(orgId, from, messageText, isFromMe, pushName).catch(err => {
+      handleIncomingMessage(orgId, from, messageText, isFromMe, pushName, whatsappMessageId).catch(err => {
          console.error('[WEBHOOK] Async handler error:', err);
       });
     }

@@ -189,6 +189,7 @@ export async function getOrCreateSession(orgId: string, forceNew: boolean = fals
           }
 
           console.log(`[WORKER] Processing message from ${msg.key.remoteJid} (fromMe: ${msg.key.fromMe})`);
+          console.log(`[WORKER] Full Message Key:`, JSON.stringify(msg.key, null, 2));
              
              // Forward to Next.js App
              try {

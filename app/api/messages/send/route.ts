@@ -60,7 +60,8 @@ export async function POST(request: Request) {
     }
 
     // 3. Send Message via Baileys
-    await sendMessage(orgId, lead.phone, message);
+    const response = await sendMessage(orgId, lead.phone, message);
+    const whatsappMessageId = response?.result?.key?.id;
 
     // 4. Save to Database
     const { error: dbError } = await supabase.from('messages').insert({
@@ -69,6 +70,7 @@ export async function POST(request: Request) {
       role: 'assistant',
       content: message,
       type: 'text',
+      whatsapp_message_id: whatsappMessageId
       // metadata: { source: 'manual' } // Optional: track this was manual
     });
 

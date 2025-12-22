@@ -8,7 +8,14 @@ import { SYSTEM_PROMPTS } from '@/lib/ai/agents';
 // }
 
 
-export async function handleIncomingMessage(orgId: string, from: string, messageText: string, isFromMe: boolean = false, name: string = '') {
+export async function handleIncomingMessage(
+  orgId: string, 
+  from: string, 
+  messageText: string, 
+  isFromMe: boolean = false, 
+  name: string = '',
+  whatsappMessageId?: string
+) {
   try {
     // Get organization
     const { data: org } = await supabaseAdmin
@@ -60,14 +67,28 @@ export async function handleIncomingMessage(orgId: string, from: string, message
             lead.name = name;
         }
     }
+    // 3. Deduplication: Check if this message already exists
+    if (whatsappMessageId) {
+      const { data: existing } = await supabaseAdmin
+        .from('messages')
+        .select('id')
+        .eq('whatsapp_message_id', whatsappMessageId)
+        .single();
+        
+      if (existing) {
+        console.log(`[BAILEYS] Duplicate message skipped: ${whatsappMessageId}`);
+        return;
+      }
+    }
 
-    // Save message
+    // 4. Save message
     await supabaseAdmin.from('messages').insert({
       organization_id: org.id,
       lead_id: lead.id,
       role: isFromMe ? 'assistant' : 'user', // isFromMe = assistant (business), else user
       content: messageText,
-      type: 'text'
+      type: 'text',
+      whatsapp_message_id: whatsappMessageId
     });
 
     // If message is from ME, stop here (we don't want AI to reply to me/business owner)
@@ -145,7 +166,8 @@ export async function handleIncomingMessage(orgId: string, from: string, message
         organization_id: org.id,
         lead_id: lead.id,
         role: 'assistant',
-        content: finalResponse
+        content: finalResponse,
+        whatsapp_message_id: `ai-${Date.now()}` // Temporary ID to prevent double-save from webhook loop
       });
 
       // Send via Baileys

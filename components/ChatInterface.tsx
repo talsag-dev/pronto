@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send, Bot, User, PauseCircle, PlayCircle, Loader2 } from 'lucide-react';
 import { createBrowserClient } from '@supabase/ssr';
+import { parsePhoneNumber } from 'libphonenumber-js';
 
 interface ChatInterfaceProps {
   lead: any;
@@ -129,12 +130,30 @@ export default function ChatInterface({ lead, user, onClose }: ChatInterfaceProp
              </div>
              <div>
                <h3 className="font-bold text-gray-900">
-                  {lead.name || lead.phone}
+                  {lead.name || (() => {
+                    try {
+                      const raw = lead.phone || '';
+                      const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
+                      const phoneNumber = parsePhoneNumber(formattedRaw);
+                      return phoneNumber ? phoneNumber.formatInternational() : raw;
+                    } catch (e) {
+                      return lead.phone;
+                    }
+                  })()}
                </h3>
                <div className="flex flex-col">
                  {lead.name && (
                    <p className="text-xs text-gray-500">
-                     {lead.phone}
+                     {(() => {
+                        try {
+                          const raw = lead.phone || '';
+                          const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
+                          const phoneNumber = parsePhoneNumber(formattedRaw);
+                          return phoneNumber ? phoneNumber.formatInternational() : raw;
+                        } catch (e) {
+                          return lead.phone;
+                        }
+                     })()}
                    </p>
                  )}
                  <p className="text-xs text-gray-400 flex items-center gap-1">
@@ -183,32 +202,37 @@ export default function ChatInterface({ lead, user, onClose }: ChatInterfaceProp
                 No messages yet.
              </div>
           ) : (
-            messages.map((m) => {
-               const isUser = m.role === 'user'; // User here means the CLIENT (lead), so "user" role is incoming
-               // Wait, in my DB logic:
-               // role='user' -> Incoming from Lead
-               // role='assistant' -> Outgoing from AI/Business
-               
-               // So if role='user', align left.
-               // If role='assistant' or 'system' (shouldn't be system visible), align right.
-               
-               return (
-                  <div 
-                    key={m.id} 
-                    className={`flex w-full ${isUser ? 'justify-start' : 'justify-end'}`}
-                  >
-                    <div 
-                      className={`max-w-[70%] text-sm p-3 rounded-2xl shadow-sm ${
-                        isUser 
-                          ? 'bg-white border border-gray-100 text-gray-800 rounded-bl-sm' 
-                          : 'bg-indigo-600 text-white rounded-br-sm'
-                      }`}
-                    >
-                      {m.content}
-                    </div>
-                  </div>
-               );
-            })
+            (() => {
+              // Deduplicate messages by whatsapp_message_id if present
+              const seen = new Set();
+              const uniqueMessages = messages.filter(m => {
+                if (!m.whatsapp_message_id) return true;
+                if (seen.has(m.whatsapp_message_id)) return false;
+                seen.add(m.whatsapp_message_id);
+                return true;
+              });
+
+              return uniqueMessages.map((m) => {
+                const isUser = m.role === 'user';
+                
+                return (
+                   <div 
+                     key={m.id} 
+                     className={`flex w-full ${isUser ? 'justify-start' : 'justify-end'}`}
+                   >
+                     <div 
+                       className={`max-w-[70%] text-sm p-3 rounded-2xl shadow-sm ${
+                         isUser 
+                           ? 'bg-white border border-gray-100 text-gray-800 rounded-bl-sm' 
+                           : 'bg-indigo-600 text-white rounded-br-sm'
+                       }`}
+                     >
+                       {m.content}
+                     </div>
+                   </div>
+                );
+              });
+            })()
           )}
         </div>
 

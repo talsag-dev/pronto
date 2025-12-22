@@ -75,8 +75,8 @@ export async function requestPairingCode(orgId: string, phoneNumber: string): Pr
 /**
  * Send Message
  */
-export async function sendMessage(orgId: string, to: string, message: string): Promise<void> {
-    await fetchWorker(`/session/${orgId}/message`, {
+export async function sendMessage(orgId: string, to: string, message: string): Promise<any> {
+    return await fetchWorker(`/session/${orgId}/message`, {
         method: 'POST',
         body: JSON.stringify({ to, message })
     });
