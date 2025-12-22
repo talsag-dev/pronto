@@ -33,7 +33,7 @@ export default function OnboardingPage() {
 
       if (data.success) {
         // Redirect to WhatsApp setup
-        router.push('/dashboard/settings/whatsapp-qr');
+        router.push('/dashboard/settings/whatsapp');
       } else {
         setError(data.error || 'Failed to create organization');
       }
@@ -45,14 +45,14 @@ export default function OnboardingPage() {
   };
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-green-50 via-white to-blue-50 flex items-center justify-center p-6">
+    <main className="min-h-screen bg-linear-to-br from-green-50 via-white to-blue-50 flex items-center justify-center p-6">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="max-w-md w-full"
       >
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-green-500 to-green-600 rounded-2xl shadow-lg shadow-green-500/30 mb-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-linear-to-br from-green-500 to-green-600 rounded-2xl shadow-lg shadow-green-500/30 mb-4">
             <Building2 size={32} className="text-white" />
           </div>
           <h1 className="text-3xl font-bold text-slate-900 mb-2">Welcome to Pronto!</h1>

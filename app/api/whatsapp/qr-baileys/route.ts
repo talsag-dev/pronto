@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
-import { getQRCode, setupMessageHandler } from '@/lib/integrations/baileys';
+import { getQRCode, ensureWorkerSession } from '@/lib/integrations/baileys';
 import { handleIncomingMessage } from '@/lib/services/message-handler';
 import QRCode from 'qrcode';
 
@@ -46,10 +46,8 @@ export async function GET(request: Request) {
 
     const orgId = org.id;
 
-    // Ensure message handler is set up
-    await setupMessageHandler(orgId, async (from, message, isFromMe) => {
-      await handleIncomingMessage(orgId, from, message, isFromMe);
-    });
+    // Ensure session is initialized on worker
+    await ensureWorkerSession(orgId);
 
     // Get QR code from Baileys
     const qrData = await getQRCode(orgId);

@@ -125,15 +125,22 @@ export default function ChatInterface({ lead, user, onClose }: ChatInterfaceProp
         <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-white shrink-0">
           <div className="flex items-center gap-3">
              <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold">
-                 {lead.phone?.slice(-2) || '?'}
+                 {lead.name ? lead.name.charAt(0).toUpperCase() : (lead.phone?.slice(-2) || '?')}
              </div>
              <div>
                <h3 className="font-bold text-gray-900">
-                  {lead.phone}
+                  {lead.name || lead.phone}
                </h3>
-               <p className="text-xs text-gray-500 flex items-center gap-1">
-                 Status: {lead.status}
-               </p>
+               <div className="flex flex-col">
+                 {lead.name && (
+                   <p className="text-xs text-gray-500">
+                     {lead.phone}
+                   </p>
+                 )}
+                 <p className="text-xs text-gray-400 flex items-center gap-1">
+                   Status: {lead.status}
+                 </p>
+               </div>
              </div>
           </div>
           

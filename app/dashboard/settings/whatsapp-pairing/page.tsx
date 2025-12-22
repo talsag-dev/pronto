@@ -23,7 +23,11 @@ export default function WhatsAppPairingSettings() {
 
     try {
       // Request pairing code (Baileys creates session automatically)
-      const res = await fetch(`/api/whatsapp/pairing?action=code&phone=${encodeURIComponent(phoneNumber)}`);
+      const res = await fetch('/api/whatsapp/pairing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumber })
+      });
       const data = await res.json();
 
       if (data.code) {

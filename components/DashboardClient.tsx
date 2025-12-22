@@ -3,13 +3,14 @@
 import { useState, useEffect } from 'react';
 import { Card, Title, Text, Metric, BarChart, Subtitle } from '@tremor/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, AlertCircle, CalendarCheck, Activity, Filter, User, LogOut, ChevronDown } from 'lucide-react';
+import { Users, AlertCircle, CalendarCheck, Activity, Filter, User, LogOut, ChevronDown, Unplug, X } from 'lucide-react';
 import { ProntoLogo } from './ProntoLogo';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import { parsePhoneNumber } from 'libphonenumber-js';
 import ChatInterface from './ChatInterface';
+import { useMixpanel } from '../lib/hooks/use-mixpanel';
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,12 +19,57 @@ const supabase = createBrowserClient(
 
 
 
-export default function DashboardClient({ leads = [], user: initialUser, whatsappStatus: initialStatus = 'not_started' }: { leads: any[], user?: any, whatsappStatus?: string }) {
+export default function DashboardClient({ leads: initialLeads = [], user: initialUser, whatsappStatus: initialStatus = 'not_started' }: { leads: any[], user?: any, whatsappStatus?: string }) {
   const router = useRouter();
   const [user, setUser] = useState<any>(initialUser);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [whatsappStatus, setWhatsappStatus] = useState(initialStatus);
   const [selectedLead, setSelectedLead] = useState<any>(null); // New state
+  const [leads, setLeads] = useState<any[]>(initialLeads);
+  const { track } = useMixpanel();
+
+  useEffect(() => {
+    track('Dashboard Viewed', {
+      user_email: user?.email,
+      lead_count: leads.length,
+      whatsapp_status: whatsappStatus
+    });
+  }, []);
+
+  // Subscribe to real-time leads updates
+  useEffect(() => {
+    const channel = supabase
+      .channel('leads-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // Listen for all events (INSERT, UPDATE, DELETE)
+          schema: 'public',
+          table: 'leads'
+        },
+        (payload) => {
+          console.log('[REALTIME] Leads update received:', payload);
+          if (payload.eventType === 'INSERT') {
+            setLeads((prev) => [payload.new, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            setLeads((prev) => 
+              prev.map((lead) => lead.id === payload.new.id ? payload.new : lead)
+            );
+          } else if (payload.eventType === 'DELETE') {
+             setLeads((prev) => prev.filter((lead) => lead.id !== payload.old.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const dismissLead = (leadId: string) => {
+    setLeads(prev => prev.filter(l => l.id !== leadId));
+  };
 
   // Fetch current user if not provided or to ensure freshness
   useEffect(() => {
@@ -34,36 +80,45 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
     }
   }, [user]);
 
-  // Fetch WhatsApp status client-side to ensure freshness (handles server component isolation issues)
+  // Fetch WhatsApp status and listen for real-time updates via SSE
   useEffect(() => {
-    const fetchStatus = async () => {
+    console.log('[SSE] Connecting to WhatsApp status stream...');
+    const eventSource = new EventSource('/api/whatsapp/pairing/sse');
+
+    eventSource.onmessage = (event) => {
       try {
-        const res = await fetch('/api/whatsapp/pairing?action=status');
-        const data = await res.json();
+        const data = JSON.parse(event.data);
+        console.log('[SSE] Received status update:', data);
+        
         if (data.status) {
-          // If in-memory status is 'not_started' but DB says 'connected', 
-          // we likely have a process isolation issue (Next.js env), but the bot is actually working.
-          // Trust the DB in this specific case.
-          if (data.status === 'not_started' && data.whatsapp_status === 'connected') {
-            setWhatsappStatus('connected');
-          } else {
-            setWhatsappStatus(data.status);
-          }
+           // If in-memory status is 'not_started' but DB says 'connected', 
+           // we likely have a process isolation issue (Next.js env), but the bot is actually working.
+           // Trust the DB in this specific case.
+           if (data.status === 'not_started' && data.whatsapp_status === 'connected') {
+             setWhatsappStatus('connected');
+           } else {
+             setWhatsappStatus(data.status);
+           }
         }
       } catch (error) {
-        console.error('Failed to fetch WhatsApp status:', error);
+        console.error('[SSE] Failed to parse message:', error);
       }
     };
 
-    fetchStatus();
-    
-    // Poll every 10 seconds to keep it fresh
-    const interval = setInterval(fetchStatus, 10000);
-    return () => clearInterval(interval);
+    eventSource.onerror = (error) => {
+      // Downgrade to warn to avoid Next.js error overlay
+      console.warn('[SSE] EventSource connection issue:', error);
+    };
+
+    return () => {
+      console.log('[SSE] Closing WhatsApp status stream...');
+      eventSource.close();
+    };
   }, []);
 
   // Handle logout
   const handleLogout = async () => {
+    track('Logout Clicked');
     await supabase.auth.signOut();
     router.push('/');
   };
@@ -89,7 +144,7 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
   };
 
   return (
-    <main className="h-full w-full overflow-y-auto md:overflow-hidden bg-slate-50/50 p-6 md:p-12">
+    <main className="h-full w-full overflow-y-auto bg-slate-50/50 p-6 md:p-12">
       <motion.div 
         variants={container}
         initial="hidden"
@@ -109,12 +164,37 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
           </div>
           
           <div className="flex items-center gap-4 self-start md:self-center">
-             {whatsappStatus !== 'connected' && (
-               <Link href="/dashboard/settings/whatsapp-qr">
-                 <button className="px-4 py-2 bg-green-600 rounded-full shadow-sm border border-green-700 text-sm font-semibold text-white hover:bg-green-700 transition-colors">
-                    WhatsApp (QR)
-                 </button>
-               </Link>
+             {whatsappStatus !== 'connected' ? (
+                <Link href="/dashboard/settings/whatsapp">
+                  <button 
+                    onClick={() => track('WhatsApp Connect Clicked')}
+                    className="px-4 py-2 bg-green-600 rounded-full shadow-sm border border-green-700 text-sm font-semibold text-white hover:bg-green-700 transition-colors"
+                  >
+                     Connect WhatsApp
+                  </button>
+                </Link>
+             ) : (
+                <button 
+                  onClick={async () => {
+                    if (!confirm('Are you sure you want to disconnect WhatsApp?')) return;
+                    try {
+                        track('WhatsApp Disconnect Clicked');
+                        const res = await fetch('/api/whatsapp/session', { method: 'DELETE' });
+                        if (res.ok) {
+                            setWhatsappStatus('disconnected');
+                            window.location.reload();
+                        } else {
+                            alert('Failed to disconnect');
+                        }
+                    } catch(e) {
+                        alert('Error disconnecting');
+                    }
+                  }}
+                  className="px-4 py-2 bg-white rounded-full shadow-sm border border-red-200 text-sm font-semibold text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2"
+                >
+                    <Unplug size={16} />
+                    Disconnect WhatsApp
+                </button>
              )}
              
              <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-full shadow-sm border border-slate-200/60 backdrop-blur-sm">
@@ -266,20 +346,25 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
                 </div>
                 
                 <div className="p-4 space-y-2 flex-1 overflow-y-auto max-h-[300px]">
+                  <AnimatePresence mode="popLayout" initial={false}>
                   {leads.slice(0, 10).map((lead) => (
-                    <div 
+                    <motion.div 
+                      layout
+                      initial={{ opacity: 0, x: -20, scale: 0.95 }}
+                      animate={{ opacity: 1, x: 0, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      transition={{ duration: 0.2 }}
                       key={lead.id} 
                       onClick={() => setSelectedLead(lead)}
-                      className="group flex items-start gap-3 p-3 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer"
+                      className="group flex items-start gap-3 p-3 rounded-xl hover:bg-indigo-50/80 transition-colors cursor-pointer"
                     >
-                      <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 text-xs font-bold shrink-0 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">
-                         {lead.phone?.slice(-2) || 'L'}
+                      <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 text-xs font-bold shrink-0 group-hover:bg-indigo-200 group-hover:text-indigo-700 transition-colors">
+                         {lead.name ? lead.name.charAt(0).toUpperCase() : (lead.phone?.slice(-2) || 'L')}
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold text-slate-700 text-sm">
-                          {(() => {
+                          {lead.name || (() => {
                             try {
-                              // Ensure number has + prefix for international parsing, otherwise Baileys numbers (e.g. 972...) might fail to parse
                               const raw = lead.phone || '';
                               const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
                               const phoneNumber = parsePhoneNumber(formattedRaw);
@@ -289,25 +374,37 @@ export default function DashboardClient({ leads = [], user: initialUser, whatsap
                             }
                           })()}
                         </p>
-                        <p className="text-xs text-slate-400 truncate">Status: {lead.status}</p>
+                        <p className="text-xs text-slate-400 truncate">
+                            {lead.name && (() => {
+                                try {
+                                    const raw = lead.phone || '';
+                                    const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
+                                    const phoneNumber = parsePhoneNumber(formattedRaw);
+                                    return (phoneNumber ? phoneNumber.formatInternational() : raw) + ' • ';
+                                } catch (e) { return ''; }
+                            })()}
+                            Status: {lead.status}
+                        </p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                            {new Date(lead.created_at).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}
+                        </p>
                       </div>
                       
-                      <div className="flex flex-col items-end gap-1 ml-auto self-center">
-                          <span className="text-[10px] text-slate-300 whitespace-nowrap">
-                            {new Date(lead.created_at).toLocaleTimeString('en-US', {hour: '2-digit', minute:'2-digit'})}
-                          </span>
-                          <button 
-                             onClick={(e) => {
-                                 e.stopPropagation();
-                                 setSelectedLead(lead);
-                             }}
-                             className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-semibold rounded-full transition-colors"
-                          >
-                             Chat
-                          </button>
-                      </div>
-                    </div>
+                          <div className="flex flex-col items-end h-full justify-between ml-auto py-1 self-stretch">
+                              <button 
+                                 onClick={(e) => {
+                                     e.stopPropagation();
+                                     dismissLead(lead.id);
+                                 }}
+                                 className="p-1 text-slate-300 hover:text-slate-500 hover:bg-white/80 rounded-full transition-colors"
+                                 title="Dismiss (UI only)"
+                              >
+                                 <X size={14} />
+                              </button>
+                          </div>
+                    </motion.div>
                   ))}
+                  </AnimatePresence>
                   {leads.length === 0 && (
                      <div className="text-center text-slate-400 py-10">No leads yet</div>
                   )}

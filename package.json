@@ -6,7 +6,8 @@
     "dev": "next dev -p ${PORT:-3001}",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "worker": "cd worker && npm run dev"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.9",
@@ -16,20 +17,15 @@
     "@supabase/supabase-js": "^2.89.0",
     "@tremor/react": "^3.18.7",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
-    "clsx": "^2.1.1",
-    "date-fns": "^4.1.0",
     "framer-motion": "^12.23.26",
-    "jimp": "^1.6.0",
     "libphonenumber-js": "^1.12.33",
     "lucide-react": "^0.562.0",
+    "mixpanel-browser": "^2.72.0",
     "next": "16.1.0",
     "openai": "^6.15.0",
     "qrcode": "^1.5.4",
-    "qrcode-terminal": "^0.12.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "sharp": "^0.34.5",
-    "tailwind-merge": "^3.4.0"
+    "react-dom": "19.2.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

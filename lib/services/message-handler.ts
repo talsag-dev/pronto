@@ -1,28 +1,14 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { openai } from '@/lib/ai/config';
 import { checkAvailability } from '@/lib/integrations/cal';
-import { sendMessage, setupMessageHandler } from '@/lib/integrations/baileys';
+import { sendMessage } from '@/lib/integrations/baileys';
 import { SYSTEM_PROMPTS } from '@/lib/ai/agents';
+//   // Moved to worker to prevent loops
+//   console.log('[BAILEYS] Initialization moved to worker.');
+// }
 
-let handlersInitialized = false;
 
-export async function initializeWhatsAppListeners() {
-  if (handlersInitialized) return;
-  
-  console.log('[BAILEYS] Initializing message handlers for all organizations...');
-  const { data: orgs } = await supabaseAdmin.from('organizations').select('*');
-  
-  for (const org of orgs || []) {
-    await setupMessageHandler(org.id, async (from, messageText, isFromMe) => {
-      await handleIncomingMessage(org.id, from, messageText, isFromMe);
-    });
-  }
-  
-  handlersInitialized = true;
-  console.log('[BAILEYS] Message handlers initialized for all organizations');
-}
-
-export async function handleIncomingMessage(orgId: string, from: string, messageText: string, isFromMe: boolean = false) {
+export async function handleIncomingMessage(orgId: string, from: string, messageText: string, isFromMe: boolean = false, name: string = '') {
   try {
     // Get organization
     const { data: org } = await supabaseAdmin
@@ -53,7 +39,8 @@ export async function handleIncomingMessage(orgId: string, from: string, message
           organization_id: org.id,
           phone: phoneNumber,
           status: 'new',
-          ai_status: isFromMe ? 'paused' : 'active' // If we started it, maybe keep it active? Or paused?
+          ai_status: isFromMe ? 'paused' : 'active', // If we started it, maybe keep it active? Or paused?
+          name: name || undefined // Save name if available
           // If business OWNER starts chat, they probably want to handle it.
         })
         .select()
@@ -65,6 +52,12 @@ export async function handleIncomingMessage(orgId: string, from: string, message
             console.log(`[BAILEYS] Human reply detected for lead ${lead.id}. Pausing AI.`);
             await supabaseAdmin.from('leads').update({ ai_status: 'paused' }).eq('id', lead.id);
             lead.ai_status = 'paused'; // Update local object
+        }
+
+        // Update name if available
+        if (name && lead.name !== name) {
+            await supabaseAdmin.from('leads').update({ name }).eq('id', lead.id);
+            lead.name = name;
         }
     }
 

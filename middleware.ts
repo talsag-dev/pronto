@@ -17,7 +17,7 @@ export default async function middleware(request: NextRequest) {
   }
 
   // Check if the path is an auth callback or other public path
-  if (request.nextUrl.pathname.startsWith('/auth/')) {
+  if (request.nextUrl.pathname.startsWith('/auth/') || request.nextUrl.pathname.startsWith('/api/webhooks/')) {
     return response;
   }
 

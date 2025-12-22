@@ -1,25 +1,58 @@
 import { NextResponse } from 'next/server';
-import { terminateSession } from '@/lib/integrations/baileys';
+import { logoutSession } from '@/lib/integrations/baileys';
+import { supabaseAdmin } from '@/lib/supabase';
+import { createServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
 
 export async function DELETE(request: Request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const orgId = searchParams.get('orgId');
+    // 1. Authenticate
+    const cookieStore = await cookies();
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() { return cookieStore.getAll(); },
+          setAll(cookiesToSet) {
+             try {
+                cookiesToSet.forEach(({ name, value, options }) =>
+                   cookieStore.set(name, value, options)
+                );
+             } catch {}
+          },
+        },
+      }
+    );
 
-    if (!orgId) {
-      return NextResponse.json({ success: false, error: 'orgId required' }, { status: 400 });
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Terminate the session (closes socket, clears memory, deletes DB data)
-    await terminateSession(orgId);
+    // 2. Get User's Organization
+    const { data: org } = await supabaseAdmin
+      .from('organizations')
+      .select('*')
+      .eq('owner_id', user.id)
+      .single();
 
-    console.log(`[API] Force reset completed for ${orgId}`);
+    if (!org) {
+        return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 404 });
+    }
+
+    const orgId = org.id;
+
+    // Terminate the session (closes socket, clears memory, deletes DB data)
+    await logoutSession(orgId);
+
+    console.log(`[API] Session terminated for ${orgId}`);
 
     return NextResponse.json({ 
       success: true, 
-      message: 'Session terminated successfully. You can now generate a new QR code.' 
+      message: 'Session terminated successfully.' 
     });
   } catch (error: any) {
     console.error('[API] Error resetting session:', error);

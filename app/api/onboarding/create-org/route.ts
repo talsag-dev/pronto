@@ -65,12 +65,10 @@ export async function POST(request: Request) {
 
     // Register message handler for the new organization
     try {
-      const { setupMessageHandler } = await import('@/lib/integrations/baileys');
-      const { handleIncomingMessage } = await import('@/lib/services/message-handler');
+      const { ensureWorkerSession } = await import('@/lib/integrations/baileys');
+      // const { handleIncomingMessage } = await import('@/lib/services/message-handler');
       
-      await setupMessageHandler(org.id, async (from, messageText, isFromMe) => {
-        await handleIncomingMessage(org.id, from, messageText, isFromMe);
-      });
+      await ensureWorkerSession(org.id);
       
       console.log(`[ONBOARDING] Registered message handler for ${org.id}`);
     } catch (handlerError) {
