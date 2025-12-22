@@ -55,6 +55,10 @@ export default function DashboardClient({ leads: initialLeads = [], user: initia
             setLeads((prev) => 
               prev.map((lead) => lead.id === payload.new.id ? payload.new : lead)
             );
+            // Also update selected lead if it's the one being updated
+            setSelectedLead((current: any) => 
+               (current?.id === payload.new.id) ? payload.new : current
+            );
           } else if (payload.eventType === 'DELETE') {
              setLeads((prev) => prev.filter((lead) => lead.id !== payload.old.id));
           }

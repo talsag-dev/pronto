@@ -49,15 +49,18 @@ export async function GET(request: Request) {
     // Ensure session is initialized on worker
     await ensureWorkerSession(orgId);
 
-    // Get QR code from Baileys
+    // Get QR data from Baileys (Worker already returns Data URL)
     const qrData = await getQRCode(orgId);
     
     if (!qrData) {
       return NextResponse.json({ error: 'No QR code available' }, { status: 404 });
     }
 
-    // Convert to base64 image
-    const qrImage = await QRCode.toDataURL(qrData);
+    // Convert to base64 image ONLY if it's not already a data URL 
+    // (Prevents "data too big" error when worker already converted it)
+    const qrImage = qrData.startsWith('data:image') 
+      ? qrData 
+      : await QRCode.toDataURL(qrData);
     
     return NextResponse.json({ qr: qrImage });
   } catch (error: any) {
