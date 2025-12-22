@@ -132,12 +132,12 @@ export default function ChatInterface({ lead, user, onClose }: ChatInterfaceProp
                <h3 className="font-bold text-gray-900">
                   {lead.name || (() => {
                     try {
-                      const raw = lead.phone || '';
+                      const raw = lead.real_phone || lead.phone || '';
                       const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
                       const phoneNumber = parsePhoneNumber(formattedRaw);
                       return phoneNumber ? phoneNumber.formatInternational() : raw;
                     } catch (e) {
-                      return lead.phone;
+                      return lead.real_phone || lead.phone;
                     }
                   })()}
                </h3>
@@ -146,12 +146,12 @@ export default function ChatInterface({ lead, user, onClose }: ChatInterfaceProp
                    <p className="text-xs text-gray-500">
                      {(() => {
                         try {
-                          const raw = lead.phone || '';
+                          const raw = lead.real_phone || lead.phone || '';
                           const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
                           const phoneNumber = parsePhoneNumber(formattedRaw);
                           return phoneNumber ? phoneNumber.formatInternational() : raw;
                         } catch (e) {
-                          return lead.phone;
+                          return lead.real_phone || lead.phone;
                         }
                      })()}
                    </p>

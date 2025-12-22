@@ -365,19 +365,19 @@ export default function DashboardClient({ leads: initialLeads = [], user: initia
                         <p className="font-semibold text-slate-700 text-sm">
                           {lead.name || (() => {
                             try {
-                              const raw = lead.phone || '';
+                              const raw = lead.real_phone || lead.phone || '';
                               const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
                               const phoneNumber = parsePhoneNumber(formattedRaw);
                               return phoneNumber ? phoneNumber.formatInternational() : raw;
                             } catch (e) {
-                              return lead.phone;
+                              return lead.real_phone || lead.phone;
                             }
                           })()}
                         </p>
                         <p className="text-xs text-slate-400 truncate">
                             {lead.name && (() => {
                                 try {
-                                    const raw = lead.phone || '';
+                                    const raw = lead.real_phone || lead.phone || '';
                                     const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
                                     const phoneNumber = parsePhoneNumber(formattedRaw);
                                     return (phoneNumber ? phoneNumber.formatInternational() : raw) + ' • ';

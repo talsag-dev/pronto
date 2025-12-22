@@ -14,7 +14,8 @@ export async function handleIncomingMessage(
   messageText: string, 
   isFromMe: boolean = false, 
   name: string = '',
-  whatsappMessageId?: string
+  whatsappMessageId?: string,
+  senderPn?: string
 ) {
   try {
     // Get organization
@@ -26,8 +27,9 @@ export async function handleIncomingMessage(
 
     if (!org) return;
 
-    // Clean phone number (remove @s.whatsapp.net)
+    // Clean phone number (remove @s.whatsapp.net or @lid)
     const phoneNumber = from.split('@')[0];
+    const realPhone = senderPn ? senderPn.split('@')[0] : null;
 
     // Find or Create Lead
     let { data: lead } = await supabaseAdmin
@@ -61,10 +63,16 @@ export async function handleIncomingMessage(
             lead.ai_status = 'paused'; // Update local object
         }
 
-        // Update name if available
         if (name && lead.name !== name) {
             await supabaseAdmin.from('leads').update({ name }).eq('id', lead.id);
             lead.name = name;
+        }
+
+        // Update real_phone if available and missing/different
+        if (realPhone && lead.real_phone !== realPhone) {
+            console.log(`[BAILEYS] Mapping LID ${phoneNumber} to phone ${realPhone}`);
+            await supabaseAdmin.from('leads').update({ real_phone: realPhone }).eq('id', lead.id);
+            lead.real_phone = realPhone;
         }
     }
     // 3. Deduplication: Check if this message already exists

@@ -13,6 +13,7 @@ import pino from 'pino';
 import NodeCache from 'node-cache';
 import { historyManager } from './history';
 import { EventEmitter } from 'events';
+import QRCode from 'qrcode';
 
 // Global emitter for session updates
 export const sessionEmitter = new EventEmitter();
@@ -117,9 +118,14 @@ export async function getOrCreateSession(orgId: string, forceNew: boolean = fals
 
     if (qr) {
       console.log(`[BAILEYS] QR Code generated for ${orgId}`);
-      const newState = { status: 'qr', qr };
-      sessionStates.set(orgId, newState);
-      sessionEmitter.emit(`update:${orgId}`, newState);
+      try {
+        const qrDataUrl = await QRCode.toDataURL(qr);
+        const newState = { status: 'qr', qr: qrDataUrl };
+        sessionStates.set(orgId, newState);
+        sessionEmitter.emit(`update:${orgId}`, newState);
+      } catch (e) {
+        console.error(`[BAILEYS] Failed to generate QR DataURL:`, e);
+      }
     }
 
     if (connection === 'close') {
