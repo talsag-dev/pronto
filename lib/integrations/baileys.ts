@@ -1,3 +1,4 @@
+import { logger } from '@/lib/shared/utils';
 
 const WORKER_URL = process.env.WHATSAPP_WORKER_URL || 'http://localhost:4000';
 const WORKER_SECRET = process.env.WORKER_SECRET || 'dev-secret';
@@ -12,12 +13,12 @@ async function fetchWorker(path: string, options: RequestInit = {}) {
     },
     cache: 'no-store'
   });
-  
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || res.statusText);
   }
-  
+
   return res.json();
 }
 
@@ -31,9 +32,9 @@ export async function ensureWorkerSession(orgId: string) {
          method: 'POST',
          body: JSON.stringify({ forceNew: false })
      });
-     console.log(`[BAILEYS CLIENT] Ensured session for ${orgId}`);
+     logger.debug('Baileys worker session registered', { orgId });
   } catch (e) {
-     console.error(`[BAILEYS CLIENT] Failed to ensure session for ${orgId}:`, e);
+     logger.error('Failed to ensure Baileys session', { error: e, orgId });
   }
 }
 

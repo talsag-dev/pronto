@@ -10,8 +10,6 @@
     "worker": "cd worker && npm run dev"
   },
   "dependencies": {
-    "@headlessui/react": "2.2.9",
-    "@heroicons/react": "2.2.0",
     "@supabase/auth-helpers-nextjs": "0.15.0",
     "@supabase/ssr": "0.8.0",
     "@supabase/supabase-js": "2.89.0",
@@ -20,8 +18,7 @@
     "framer-motion": "12.23.26",
     "libphonenumber-js": "1.12.33",
     "lucide-react": "0.562.0",
-    "mixpanel": "0.19.1",
-    "mixpanel-browser": "2.72.0",
+    "mixpanel-browser": "2.73.0",
     "next": "16.1.0",
     "openai": "6.15.0",
     "qrcode": "1.5.4",

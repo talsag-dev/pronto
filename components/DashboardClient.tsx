@@ -8,7 +8,7 @@ import { ProntoLogo } from './ProntoLogo';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
-import { parsePhoneNumber } from 'libphonenumber-js';
+import { formatPhoneNumber } from '../lib/shared/utils/phone';
 import ChatInterface from './ChatInterface';
 import { useMixpanel } from '../lib/hooks/use-mixpanel';
 
@@ -170,7 +170,7 @@ export default function DashboardClient({ leads: initialLeads = [], user: initia
           <div className="flex items-center gap-4 self-start md:self-center">
              {whatsappStatus !== 'connected' ? (
                 <Link href="/dashboard/settings/whatsapp">
-                  <button 
+                  <button
                     onClick={() => track('WhatsApp Connect Clicked')}
                     className="px-4 py-2 bg-green-600 rounded-full shadow-sm border border-green-700 text-sm font-semibold text-white hover:bg-green-700 transition-colors"
                   >
@@ -178,7 +178,7 @@ export default function DashboardClient({ leads: initialLeads = [], user: initia
                   </button>
                 </Link>
              ) : (
-                <button 
+                <button
                   onClick={async () => {
                     if (!confirm('Are you sure you want to disconnect WhatsApp?')) return;
                     try {
@@ -367,26 +367,10 @@ export default function DashboardClient({ leads: initialLeads = [], user: initia
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold text-slate-700 text-sm">
-                          {lead.name || (() => {
-                            try {
-                              const raw = lead.real_phone || lead.phone || '';
-                              const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
-                              const phoneNumber = parsePhoneNumber(formattedRaw);
-                              return phoneNumber ? phoneNumber.formatInternational() : raw;
-                            } catch (e) {
-                              return lead.real_phone || lead.phone;
-                            }
-                          })()}
+                          {lead.name || formatPhoneNumber(lead.real_phone || lead.phone)}
                         </p>
                         <p className="text-xs text-slate-400 truncate">
-                            {lead.name && (() => {
-                                try {
-                                    const raw = lead.real_phone || lead.phone || '';
-                                    const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
-                                    const phoneNumber = parsePhoneNumber(formattedRaw);
-                                    return (phoneNumber ? phoneNumber.formatInternational() : raw) + ' • ';
-                                } catch (e) { return ''; }
-                            })()}
+                            {lead.name && `${formatPhoneNumber(lead.real_phone || lead.phone)} • `}
                             Status: {lead.status}
                         </p>
                         <p className="text-[10px] text-slate-400 mt-0.5">

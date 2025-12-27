@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send, Bot, User, PauseCircle, PlayCircle, Loader2 } from 'lucide-react';
 import { createBrowserClient } from '@supabase/ssr';
-import { parsePhoneNumber } from 'libphonenumber-js';
+import { formatPhoneNumber } from '../lib/shared/utils/phone';
 
 interface ChatInterfaceProps {
   lead: any;
@@ -130,30 +130,12 @@ export default function ChatInterface({ lead, user, onClose }: ChatInterfaceProp
              </div>
              <div>
                <h3 className="font-bold text-gray-900">
-                  {lead.name || (() => {
-                    try {
-                      const raw = lead.real_phone || lead.phone || '';
-                      const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
-                      const phoneNumber = parsePhoneNumber(formattedRaw);
-                      return phoneNumber ? phoneNumber.formatInternational() : raw;
-                    } catch (e) {
-                      return lead.real_phone || lead.phone;
-                    }
-                  })()}
+                  {lead.name || formatPhoneNumber(lead.real_phone || lead.phone)}
                </h3>
                <div className="flex flex-col">
                  {lead.name && (
                    <p className="text-xs text-gray-500">
-                     {(() => {
-                        try {
-                          const raw = lead.real_phone || lead.phone || '';
-                          const formattedRaw = raw.startsWith('+') ? raw : `+${raw}`;
-                          const phoneNumber = parsePhoneNumber(formattedRaw);
-                          return phoneNumber ? phoneNumber.formatInternational() : raw;
-                        } catch (e) {
-                          return lead.real_phone || lead.phone;
-                        }
-                     })()}
+                     {formatPhoneNumber(lead.real_phone || lead.phone)}
                    </p>
                  )}
                  <p className="text-xs text-gray-400 flex items-center gap-1">

@@ -32,6 +32,17 @@ export function validateQuery<T extends ZodSchema>(
 }
 
 /**
+ * Normalize phone number by removing formatting characters
+ * Keeps leading '+' for international format, removes spaces, dashes, parentheses
+ */
+function normalizePhoneNumber(phone: string): string {
+  // Keep leading '+' if present, remove all other non-digit characters
+  const hasPlus = phone.startsWith('+');
+  const cleaned = phone.replace(/[^\d]/g, '');
+  return hasPlus ? `+${cleaned}` : cleaned;
+}
+
+/**
  * Common validation schemas
  */
 export const commonSchemas = {
@@ -40,6 +51,9 @@ export const commonSchemas = {
     page: z.coerce.number().int().positive().default(1),
     limit: z.coerce.number().int().positive().max(100).default(10),
   }),
-  phoneNumber: z.string().min(10).max(15),
+  phoneNumber: z
+    .string()
+    .transform((val) => normalizePhoneNumber(val))
+    .pipe(z.string().min(10, 'Phone number must be at least 10 digits').max(15, 'Phone number must be at most 15 digits')),
   email: z.string().email(),
 };

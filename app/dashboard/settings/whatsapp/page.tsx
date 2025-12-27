@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Smartphone, QrCode, CheckCircle2, RefreshCw, ArrowLeft, Hash } from 'lucide-react';
+import { Smartphone, QrCode, CheckCircle2, RefreshCw, ArrowLeft, Hash, Copy, Check } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 
@@ -19,6 +19,7 @@ export default function WhatsAppQRSettings() {
   // State for Phone Pairing
   const [phoneNumber, setPhoneNumber] = useState('');
   const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // Common State
   const [loading, setLoading] = useState(false);
@@ -100,13 +101,14 @@ export default function WhatsAppQRSettings() {
 
     try {
       const res = await fetch('/api/whatsapp/qr-baileys');
-      const data = await res.json();
+      const response = await res.json();
 
-      if (data.qr) {
-        setQrCode(data.qr);
+      // API returns { success: true, data: { qr: "..." } }
+      if (response.success && response.data?.qr) {
+        setQrCode(response.data.qr);
         startSse();
       } else {
-        setError(data.error || 'Failed to get QR code');
+        setError(response.error || 'Failed to get QR code');
       }
     } catch (e: any) {
       setError(e.message || 'Something went wrong');
@@ -125,7 +127,8 @@ export default function WhatsAppQRSettings() {
     setLoading(true);
     setError('');
     setQrCode(null);
-    setPairingCode(null);
+    // Don't reset pairingCode here - keep showing old code while regenerating
+    setCopied(false);
     setConnected(false);
 
     try {
@@ -134,18 +137,32 @@ export default function WhatsAppQRSettings() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phoneNumber })
       });
-      const data = await res.json();
+      const response = await res.json();
 
-      if (data.code) {
-        setPairingCode(data.code);
+      // API returns { success: true, data: { code: "..." } }
+      if (response.success && response.data?.code) {
+        setPairingCode(response.data.code);
         startSse();
       } else {
-        setError(data.error || 'Failed to get pairing code');
+        setError(response.error || 'Failed to get pairing code');
       }
     } catch (e: any) {
       setError(e.message || 'Something went wrong');
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Copy pairing code to clipboard
+  async function handleCopyCode() {
+    if (!pairingCode) return;
+
+    try {
+      await navigator.clipboard.writeText(pairingCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error('Failed to copy:', e);
     }
   }
 
@@ -325,7 +342,7 @@ export default function WhatsAppQRSettings() {
                                     </button>
                                 </div>
                             ) : (
-                                <div className="space-y-8">
+                                <div className="space-y-6">
                                     <div className="p-6 bg-slate-900 rounded-2xl shadow-xl">
                                         <p className="text-slate-400 text-sm mb-2 uppercase tracking-wider font-semibold">Pairing Code</p>
                                         <div className="flex items-center justify-center gap-1 font-mono text-4xl font-bold text-white tracking-[0.2em]">
@@ -334,7 +351,35 @@ export default function WhatsAppQRSettings() {
                                             ))}
                                         </div>
                                     </div>
-                                    
+
+                                    {/* Action Buttons */}
+                                    <div className="flex gap-3">
+                                        <button
+                                            onClick={handleCopyCode}
+                                            className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm"
+                                        >
+                                            {copied ? (
+                                                <>
+                                                    <Check size={18} />
+                                                    Copied!
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Copy size={18} />
+                                                    Copy Code
+                                                </>
+                                            )}
+                                        </button>
+                                        <button
+                                            onClick={handleGetPairingCode}
+                                            disabled={loading}
+                                            className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                                        >
+                                            <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+                                            {loading ? 'Regenerating...' : 'Regenerate'}
+                                        </button>
+                                    </div>
+
                                     <div className="text-left space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
                                         <h3 className="font-bold text-slate-900">Instructions:</h3>
                                         <ol className="list-decimal list-inside space-y-2 text-slate-600 text-sm">
@@ -346,8 +391,11 @@ export default function WhatsAppQRSettings() {
                                         </ol>
                                     </div>
 
-                                    <button 
-                                        onClick={() => setPairingCode(null)}
+                                    <button
+                                        onClick={() => {
+                                            setPairingCode(null);
+                                            setCopied(false);
+                                        }}
                                         className="text-slate-400 hover:text-slate-600 text-sm underline"
                                     >
                                         Try different number

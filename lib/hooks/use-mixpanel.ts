@@ -15,12 +15,12 @@ export const useMixpanel = () => {
           api_host: "https://api-eu.mixpanel.com",
           ignore_dnt: true,
         });
-        
+
         mixpanel.track("Mixpanel Initialized", {
           timestamp: new Date().toISOString(),
           environment: process.env.NODE_ENV,
         });
-        
+
         mixpanel.track_pageview();
       }
     }

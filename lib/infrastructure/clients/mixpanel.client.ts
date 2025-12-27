@@ -1,328 +1,127 @@
 /**
- * Mixpanel Client
+ * Mixpanel Analytics Client
  *
- * Wrapper for Mixpanel analytics tracking.
- * Encapsulates event tracking and user properties.
+ * Wrapper for Mixpanel browser SDK for tracking user events and analytics.
+ * Used for understanding user behavior and product analytics.
  */
 
-import Mixpanel from 'mixpanel';
-import { env } from '@/lib/shared/config';
-import { logger } from '@/lib/shared/utils';
+import mixpanel from 'mixpanel-browser';
 
 export interface TrackEventParams {
-  event: string;
-  distinctId: string;
+  eventName: string;
   properties?: Record<string, any>;
 }
 
 export interface UserProperties {
-  $name?: string;
-  $email?: string;
-  $phone?: string;
-  $created?: Date;
   [key: string]: any;
 }
 
+/**
+ * Mixpanel Client
+ *
+ * Provides methods for tracking events and user properties.
+ */
 export class MixpanelClient {
-  private readonly client: Mixpanel.Mixpanel | null;
-  private readonly enabled: boolean;
+  private initialized = false;
 
-  constructor(token?: string) {
-    const mixpanelToken = token || env.MIXPANEL_TOKEN;
-
-    if (mixpanelToken) {
-      this.client = Mixpanel.init(mixpanelToken, {
-        protocol: 'https',
-      });
-      this.enabled = true;
-      logger.info('Mixpanel client initialized');
-    } else {
-      this.client = null;
-      this.enabled = false;
-      logger.warn('Mixpanel token not found - analytics disabled');
+  /**
+   * Initialize Mixpanel with project token
+   */
+  init(token: string): void {
+    if (this.initialized) {
+      return;
     }
+
+    mixpanel.init(token, {
+      debug: process.env.NODE_ENV === 'development',
+      track_pageview: false,
+      persistence: 'localStorage',
+      api_host: 'https://api-eu.mixpanel.com',
+      ignore_dnt: true,
+    });
+
+    this.initialized = true;
   }
 
   /**
    * Track an event
    */
   track(params: TrackEventParams): void {
-    if (!this.enabled || !this.client) {
-      logger.debug('Mixpanel tracking skipped (disabled)', { event: params.event });
+    if (!this.initialized) {
+      console.warn('Mixpanel not initialized');
       return;
     }
 
     try {
-      this.client.track(params.event, {
-        distinct_id: params.distinctId,
-        ...params.properties,
-        timestamp: new Date().toISOString(),
-      });
-
-      logger.debug('Mixpanel event tracked', {
-        event: params.event,
-        distinctId: params.distinctId,
-      });
+      mixpanel.track(params.eventName, params.properties);
     } catch (error) {
-      // Don't throw - analytics failures shouldn't break app
-      logger.error('Failed to track Mixpanel event', error, {
-        event: params.event,
-      });
+      console.error('Mixpanel track error:', error);
     }
   }
 
   /**
    * Set user properties
    */
-  setUserProperties(distinctId: string, properties: UserProperties): void {
-    if (!this.enabled || !this.client) {
+  setUserProperties(properties: UserProperties): void {
+    if (!this.initialized) {
+      console.warn('Mixpanel not initialized');
       return;
     }
 
     try {
-      this.client.people.set(distinctId, properties);
-
-      logger.debug('Mixpanel user properties set', { distinctId });
+      mixpanel.people.set(properties);
     } catch (error) {
-      logger.error('Failed to set Mixpanel user properties', error, {
-        distinctId,
-      });
+      console.error('Mixpanel set properties error:', error);
     }
   }
 
   /**
-   * Increment a user property
+   * Identify user
    */
-  incrementUserProperty(distinctId: string, property: string, by: number = 1): void {
-    if (!this.enabled || !this.client) {
+  identify(userId: string): void {
+    if (!this.initialized) {
+      console.warn('Mixpanel not initialized');
       return;
     }
 
     try {
-      this.client.people.increment(distinctId, property, by);
+      mixpanel.identify(userId);
     } catch (error) {
-      logger.error('Failed to increment Mixpanel property', error, {
-        distinctId,
-        property,
-      });
+      console.error('Mixpanel identify error:', error);
     }
   }
 
   /**
-   * Track lead created event
+   * Track page view
    */
-  trackLeadCreated(params: {
-    organizationId: string;
-    leadId: string;
-    phone: string;
-    source?: string;
-  }): void {
-    this.track({
-      event: 'Lead Created',
-      distinctId: params.organizationId,
-      properties: {
-        leadId: params.leadId,
-        phone: params.phone,
-        source: params.source || 'unknown',
-      },
-    });
-
-    // Increment lead count for organization
-    this.incrementUserProperty(params.organizationId, 'total_leads');
-  }
-
-  /**
-   * Track message sent event
-   */
-  trackMessageSent(params: {
-    organizationId: string;
-    leadId: string;
-    role: 'user' | 'assistant' | 'system';
-    type: 'text' | 'audio';
-    messageLength: number;
-  }): void {
-    this.track({
-      event: 'Message Sent',
-      distinctId: params.organizationId,
-      properties: {
-        leadId: params.leadId,
-        role: params.role,
-        type: params.type,
-        messageLength: params.messageLength,
-      },
-    });
-
-    // Increment message counters
-    this.incrementUserProperty(params.organizationId, 'total_messages');
-    if (params.role === 'assistant') {
-      this.incrementUserProperty(params.organizationId, 'ai_messages');
-    }
-  }
-
-  /**
-   * Track WhatsApp connection event
-   */
-  trackWhatsAppConnected(params: {
-    organizationId: string;
-    phoneNumber: string;
-    method: 'qr' | 'pairing';
-  }): void {
-    this.track({
-      event: 'WhatsApp Connected',
-      distinctId: params.organizationId,
-      properties: {
-        phoneNumber: params.phoneNumber,
-        method: params.method,
-      },
-    });
-
-    this.setUserProperties(params.organizationId, {
-      whatsapp_connected: true,
-      whatsapp_phone: params.phoneNumber,
-      whatsapp_connected_at: new Date(),
-    });
-  }
-
-  /**
-   * Track AI status toggle event
-   */
-  trackAIToggle(params: {
-    organizationId: string;
-    leadId: string;
-    status: 'active' | 'paused';
-  }): void {
-    this.track({
-      event: 'AI Status Toggled',
-      distinctId: params.organizationId,
-      properties: {
-        leadId: params.leadId,
-        newStatus: params.status,
-      },
-    });
-  }
-
-  /**
-   * Track conversation summary generated
-   */
-  trackSummaryGenerated(params: {
-    organizationId: string;
-    leadId: string;
-    messageCount: number;
-    summaryLength: number;
-  }): void {
-    this.track({
-      event: 'Summary Generated',
-      distinctId: params.organizationId,
-      properties: {
-        leadId: params.leadId,
-        messageCount: params.messageCount,
-        summaryLength: params.summaryLength,
-      },
-    });
-
-    this.incrementUserProperty(params.organizationId, 'summaries_generated');
-  }
-
-  /**
-   * Track organization created event
-   */
-  trackOrganizationCreated(params: {
-    organizationId: string;
-    userId: string;
-    name: string;
-    businessPhone: string;
-  }): void {
-    this.track({
-      event: 'Organization Created',
-      distinctId: params.organizationId,
-      properties: {
-        userId: params.userId,
-        name: params.name,
-        businessPhone: params.businessPhone,
-      },
-    });
-
-    this.setUserProperties(params.organizationId, {
-      $name: params.name,
-      $phone: params.businessPhone,
-      $created: new Date(),
-      owner_id: params.userId,
-    });
-  }
-
-  /**
-   * Track user authentication event
-   */
-  trackUserAuth(params: {
-    userId: string;
-    email: string;
-    event: 'login' | 'signup' | 'logout';
-  }): void {
-    this.track({
-      event: params.event === 'signup' ? 'User Signed Up' : params.event === 'login' ? 'User Logged In' : 'User Logged Out',
-      distinctId: params.userId,
-      properties: {
-        email: params.email,
-      },
-    });
-
-    if (params.event === 'signup') {
-      this.setUserProperties(params.userId, {
-        $email: params.email,
-        $created: new Date(),
-      });
-    }
-  }
-
-  /**
-   * Track error event
-   */
-  trackError(params: {
-    organizationId: string;
-    error: string;
-    context?: Record<string, any>;
-  }): void {
-    this.track({
-      event: 'Error Occurred',
-      distinctId: params.organizationId,
-      properties: {
-        error: params.error,
-        ...params.context,
-      },
-    });
-  }
-
-  /**
-   * Flush events (for graceful shutdown)
-   */
-  async flush(): Promise<void> {
-    if (!this.enabled || !this.client) {
+  trackPageView(pageName?: string): void {
+    if (!this.initialized) {
+      console.warn('Mixpanel not initialized');
       return;
     }
 
-    return new Promise((resolve, reject) => {
-      this.client!.track('Flush', {}, (err) => {
-        if (err) {
-          logger.error('Failed to flush Mixpanel events', err);
-          reject(err);
-        } else {
-          logger.info('Mixpanel events flushed');
-          resolve();
-        }
-      });
-    });
+    try {
+      mixpanel.track_pageview(pageName ? { page: pageName } : undefined);
+    } catch (error) {
+      console.error('Mixpanel track pageview error:', error);
+    }
+  }
+
+  /**
+   * Reset user identity (on logout)
+   */
+  reset(): void {
+    if (!this.initialized) {
+      return;
+    }
+
+    try {
+      mixpanel.reset();
+    } catch (error) {
+      console.error('Mixpanel reset error:', error);
+    }
   }
 }
 
 // Singleton instance
-let mixpanelClientInstance: MixpanelClient | null = null;
-
-/**
- * Get or create Mixpanel client instance
- */
-export function mixpanelClient(): MixpanelClient {
-  if (!mixpanelClientInstance) {
-    mixpanelClientInstance = new MixpanelClient();
-  }
-  return mixpanelClientInstance;
-}
+export const mixpanelClient = new MixpanelClient();
