@@ -1,61 +1,48 @@
-import { NextResponse } from 'next/server';
+/**
+ * WhatsApp Session Management
+ * DELETE /api/whatsapp/session
+ *
+ * Terminates the WhatsApp session for the user's organization.
+ * Closes the socket connection, clears memory, and deletes database session data.
+ */
+
+import {
+  requireAuth,
+  successResponse,
+  withErrorHandler,
+} from '@/lib/api';
 import { logoutSession } from '@/lib/integrations/baileys';
+import { OrganizationsRepository } from '@/lib/infrastructure/repositories';
 import { supabaseAdmin } from '@/lib/supabase';
-import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
+import { logger } from '@/lib/shared/utils';
 
 export const dynamic = 'force-dynamic';
 
-export async function DELETE(request: Request) {
-  try {
-    // 1. Authenticate
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() { return cookieStore.getAll(); },
-          setAll(cookiesToSet) {
-             try {
-                cookiesToSet.forEach(({ name, value, options }) =>
-                   cookieStore.set(name, value, options)
-                );
-             } catch {}
-          },
-        },
-      }
-    );
+export const DELETE = withErrorHandler(async (request: Request) => {
+  // 1. Authenticate user
+  const user = await requireAuth();
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
+  // 2. Initialize repository
+  const orgsRepo = new OrganizationsRepository(supabaseAdmin);
 
-    // 2. Get User's Organization
-    const { data: org } = await supabaseAdmin
-      .from('organizations')
-      .select('*')
-      .eq('owner_id', user.id)
-      .single();
+  // 3. Get user's organization
+  const org = await orgsRepo.getByOwnerId(user.id);
 
-    if (!org) {
-        return NextResponse.json({ success: false, error: 'Organization not found' }, { status: 404 });
-    }
-
-    const orgId = org.id;
-
-    // Terminate the session (closes socket, clears memory, deletes DB data)
-    await logoutSession(orgId);
-
-    console.log(`[API] Session terminated for ${orgId}`);
-
-    return NextResponse.json({ 
-      success: true, 
-      message: 'Session terminated successfully.' 
-    });
-  } catch (error: any) {
-    console.error('[API] Error resetting session:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  if (!org) {
+    throw new Error('Organization not found');
   }
-}
+
+  // 4. Terminate the session (closes socket, clears memory, deletes DB data)
+  await logoutSession(org.id);
+
+  logger.info('WhatsApp session terminated', {
+    userId: user.id,
+    orgId: org.id,
+  });
+
+  // 5. Return success response
+  return successResponse({
+    success: true,
+    message: 'Session terminated successfully.',
+  });
+});

@@ -1,174 +1,209 @@
-import { NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabase';
-import { openai } from '@/lib/ai/config';
-import { checkAvailability } from '@/lib/integrations/cal';
-import { sendWhatsAppMessage } from '@/lib/integrations/whatsapp-cloud';
-import { SYSTEM_PROMPTS } from '@/lib/ai/agents';
+/**
+ * WhatsApp Cloud API Webhook
+ * GET/POST /api/webhook/whatsapp
+ *
+ * Handles webhooks from Meta's WhatsApp Cloud API.
+ * GET: Webhook verification during setup
+ * POST: Receives incoming WhatsApp messages
+ */
 
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { successResponse, withErrorHandler, commonErrors } from '@/lib/api';
+import { supabaseAdmin } from '@/lib/supabase';
+import {
+  OrganizationsRepository,
+  LeadsRepository,
+  MessagesRepository,
+} from '@/lib/infrastructure/repositories';
+import { processMessageWithAI } from '@/lib/services/ai-processor';
+import { sendWhatsAppMessage } from '@/lib/integrations/whatsapp-cloud';
+import { logger } from '@/lib/shared/utils';
+
+/**
+ * GET - Webhook Verification
+ * Meta calls this endpoint during webhook setup to verify ownership
+ */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  
+
   const mode = searchParams.get('hub.mode');
   const token = searchParams.get('hub.verify_token');
   const challenge = searchParams.get('hub.challenge');
 
-  // Verify webhook
+  logger.debug('WhatsApp webhook verification request', { mode, hasToken: !!token });
+
+  // Verify webhook with Meta's verify token
   if (mode === 'subscribe' && token === process.env.META_WEBHOOK_VERIFY_TOKEN) {
-    console.log('[WEBHOOK] Verified');
+    logger.info('WhatsApp webhook verified successfully');
     return new NextResponse(challenge, { status: 200 });
   }
 
+  logger.warn('WhatsApp webhook verification failed', { mode, tokenMatch: false });
   return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 }
 
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
+export const maxDuration = 60; // Allow 60s timeout for long-running AI processing
 
-    // Meta sends test messages, ignore them
-    if (body.object !== 'whatsapp_business_account') {
-      return NextResponse.json({ status: 'ignored' });
-    }
+/**
+ * POST - Receive WhatsApp Messages
+ * Meta calls this endpoint when a message is received
+ */
+export const POST = withErrorHandler(async (request: Request) => {
+  // 1. Parse request body (Meta doesn't follow standard validation)
+  const body = await request.json();
 
-    const entry = body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
+  // Meta sends test messages during setup - ignore them
+  if (body.object !== 'whatsapp_business_account') {
+    logger.debug('WhatsApp webhook ignored - not business account', {
+      object: body.object,
+    });
+    return successResponse({ status: 'ignored' });
+  }
 
-    if (!value?.messages) {
-      return NextResponse.json({ status: 'no_messages' });
-    }
+  // Extract message details from Meta's webhook structure
+  const entry = body.entry?.[0];
+  const changes = entry?.changes?.[0];
+  const value = changes?.value;
 
-    const message = value.messages[0];
-    const phoneNumberId = value.metadata.phone_number_id;
-    const from = message.from; // Lead's phone
-    const messageText = message.text?.body;
+  if (!value?.messages) {
+    logger.debug('WhatsApp webhook ignored - no messages');
+    return successResponse({ status: 'no_messages' });
+  }
 
-    console.log(`[WHATSAPP] Phone ID: ${phoneNumberId} | From: ${from} | Message: ${messageText}`);
+  const message = value.messages[0];
+  const phoneNumberId = value.metadata?.phone_number_id;
+  const from = message.from; // Lead's phone number
+  const messageText = message.text?.body;
 
-    // 1. Find Organization by phone_number_id
-    const { data: org } = await supabaseAdmin
-      .from('organizations')
-      .select('*')
-      .eq('whatsapp_phone_id', phoneNumberId)
-      .single();
+  if (!phoneNumberId || !from) {
+    logger.warn('WhatsApp webhook missing required fields', {
+      hasPhoneNumberId: !!phoneNumberId,
+      hasFrom: !!from,
+    });
+    return commonErrors.badRequest('Missing phone_number_id or from');
+  }
 
-    if (!org) {
-      console.warn(`[WHATSAPP] No org found for phone_id: ${phoneNumberId}`);
-      return NextResponse.json({ status: 'no_org' });
-    }
+  logger.info('WhatsApp webhook received', {
+    phoneNumberId,
+    from,
+    hasText: !!messageText,
+  });
 
-    // 2. Find or Create Lead
-    let { data: lead } = await supabaseAdmin
-      .from('leads')
-      .select('*')
-      .eq('organization_id', org.id)
-      .eq('phone', from)
-      .single();
+  // 2. Find Organization by WhatsApp phone_number_id
+  const orgsRepo = new OrganizationsRepository(supabaseAdmin);
 
-    if (!lead) {
-      const { data: newLead } = await supabaseAdmin
-        .from('leads')
-        .insert({
-          organization_id: org.id,
-          phone: from,
-          status: 'new'
-        })
-        .select()
-        .single();
-      lead = newLead;
-    }
+  // Note: Using direct query because whatsapp_phone_id is not in the generated types
+  // This field is dynamically added during OAuth callback
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('*')
+    .eq('whatsapp_phone_id', phoneNumberId)
+    .single();
 
-    // 3. Save incoming message
-    await supabaseAdmin.from('messages').insert({
-      organization_id: org.id,
-      lead_id: lead.id,
-      role: 'user',
-      content: messageText,
-      type: 'text'
+  if (!org) {
+    logger.warn('WhatsApp webhook ignored - no organization found', {
+      phoneNumberId,
+    });
+    return successResponse({ status: 'no_org' });
+  }
+
+  // 3. Find or Create Lead
+  const leadsRepo = new LeadsRepository(supabaseAdmin);
+  const messagesRepo = new MessagesRepository(supabaseAdmin);
+
+  let lead = await leadsRepo.findByPhone(org.id, from);
+
+  if (!lead) {
+    // New lead - create it
+    lead = await leadsRepo.createLead({
+      organizationId: org.id,
+      phone: from,
+    });
+    logger.info('New lead created for WhatsApp message', {
+      leadId: lead.id,
+      orgId: org.id,
+      phone: from,
+    });
+  }
+
+  // 4. Save incoming message
+  await messagesRepo.createMessage({
+    organizationId: org.id,
+    leadId: lead.id,
+    role: 'user',
+    content: messageText || '',
+    type: 'text',
+  });
+
+  // 5. Get conversation history
+  const messages = await messagesRepo.getConversationHistory(lead.id, {
+    limit: 20,
+    includeSystem: false,
+  });
+
+  const history = messages
+    .filter((m) => m.content !== null)
+    .map((m) => ({
+      role: m.role,
+      content: m.content as string,
+    }));
+
+  logger.debug('Fetched WhatsApp conversation history', {
+    leadId: lead.id,
+    messageCount: history.length,
+  });
+
+  // 6. Process message with AI
+  const orgConfig = org.config as Record<string, any> | null;
+  const orgIntegrations = org.integrations as Record<string, any> | null;
+
+  const aiResult = await processMessageWithAI({
+    organizationId: org.id,
+    organizationName: org.name,
+    systemPrompt: orgConfig?.system_prompt,
+    calAccessToken: org.cal_access_token || orgIntegrations?.cal_api_key,
+    conversationHistory: history,
+    userMessage: messageText || '',
+  });
+
+  // 7. Save & Send AI Response
+  if (aiResult.response) {
+    // Save assistant message to database
+    await messagesRepo.createMessage({
+      organizationId: org.id,
+      leadId: lead.id,
+      role: 'assistant',
+      content: aiResult.response,
     });
 
-    // 4. Get conversation history
-    const { data: history } = await supabaseAdmin
-      .from('messages')
-      .select('role, content')
-      .eq('lead_id', lead.id)
-      .order('created_at', { ascending: true })
-      .limit(20);
+    // Send via WhatsApp Cloud API
+    const whatsappPhoneId = (org as any).whatsapp_phone_id;
+    const whatsappAccessToken = (org as any).whatsapp_access_token;
 
-    // 5. AI Processing
-    const systemPrompt = org.config?.system_prompt || SYSTEM_PROMPTS.SALES;
-    const calAccessToken = org.cal_access_token || org.integrations?.cal_api_key;
-
-    const tools = [
-      {
-        type: 'function',
-        function: {
-          name: 'check_availability',
-          description: 'Check calendar availability',
-          parameters: {
-            type: 'object',
-            properties: {
-              startTime: { type: 'string' },
-              endTime: { type: 'string' }
-            },
-            required: ['startTime', 'endTime']
-          }
-        }
-      }
-    ];
-
-    const messages: any[] = [
-      { role: 'system', content: systemPrompt },
-      ...(history || []).map((m: any) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: messageText }
-    ];
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: messages as any,
-      tools: tools as any,
-      tool_choice: 'auto'
-    });
-
-    const aiMessage = response.choices[0].message;
-    let finalResponse = aiMessage.content;
-
-    // Handle tool calls
-    if (aiMessage.tool_calls) {
-      for (const toolCall of aiMessage.tool_calls) {
-        const tc = toolCall as any; // Type assertion for OpenAI SDK compatibility
-        if (tc.function?.name === 'check_availability') {
-          const args = JSON.parse(tc.function.arguments);
-          const result = await checkAvailability(args.startTime, args.endTime, calAccessToken);
-          finalResponse = `Based on the calendar: ${JSON.stringify(result)}`;
-        }
-      }
-    }
-
-    // 6. Save AI response
-    if (finalResponse) {
-      await supabaseAdmin.from('messages').insert({
-        organization_id: org.id,
-        lead_id: lead.id,
-        role: 'assistant',
-        content: finalResponse
-      });
-
-      // 7. Send via WhatsApp Cloud API
+    if (whatsappPhoneId && whatsappAccessToken) {
       await sendWhatsAppMessage(
-        org.whatsapp_phone_id!,
-        org.whatsapp_access_token!,
+        whatsappPhoneId,
+        whatsappAccessToken,
         from,
-        finalResponse
+        aiResult.response
       );
 
-      console.log(`[AI] Sent: ${finalResponse}`);
+      logger.info('WhatsApp AI response sent', {
+        orgId: org.id,
+        orgName: org.name,
+        leadPhone: from,
+        responseLength: aiResult.response.length,
+        hadToolCalls: !!aiResult.toolCalls,
+      });
+    } else {
+      logger.warn('WhatsApp credentials missing - response not sent', {
+        orgId: org.id,
+        hasPhoneId: !!whatsappPhoneId,
+        hasAccessToken: !!whatsappAccessToken,
+      });
     }
-
-    return NextResponse.json({ status: 'success' });
-
-  } catch (error) {
-    console.error('[WHATSAPP WEBHOOK ERROR]:', error);
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
-}
+
+  return successResponse({ status: 'success' });
+});

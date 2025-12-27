@@ -1,71 +1,155 @@
-import { NextResponse } from 'next/server';
+/**
+ * Nudge Cron Job
+ * GET /api/cron/nudge
+ *
+ * Automated job that sends gentle nudge messages to stale leads.
+ * Runs daily via Vercel Cron or external scheduler.
+ * Secured with CRON_SECRET bearer token.
+ */
+
+import { successResponse, withErrorHandler, commonErrors } from '@/lib/api';
 import { supabaseAdmin } from '@/lib/supabase';
-import { openai } from '@/lib/ai/config';
+import {
+  OrganizationsRepository,
+  LeadsRepository,
+  MessagesRepository,
+} from '@/lib/infrastructure/repositories';
+import { generateNudgeMessage } from '@/lib/services/ai-processor';
 import { SYSTEM_PROMPTS } from '@/lib/ai/agents';
+import { logger } from '@/lib/shared/utils';
 
-function verifyCron(request: Request) {
+/**
+ * Verify cron request authorization
+ */
+function verifyCronSecret(request: Request): boolean {
   const authHeader = request.headers.get('authorization');
-  return authHeader === `Bearer ${process.env.CRON_SECRET}`;
+  const expectedAuth = `Bearer ${process.env.CRON_SECRET}`;
+  return authHeader === expectedAuth;
 }
 
-export async function GET(request: Request) {
-  if (!verifyCron(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export const GET = withErrorHandler(async (request: Request) => {
+  // 1. Verify cron authorization
+  if (!verifyCronSecret(request)) {
+    logger.warn('Unauthorized nudge cron attempt');
+    return commonErrors.unauthorized();
   }
 
-  const results = [];
-  
-  // 1. Fetch All Orgs
-  const { data: orgs } = await supabaseAdmin.from('organizations').select('*');
+  logger.info('Nudge cron job started');
 
-  if (!orgs) return NextResponse.json({ message: 'No organizations found' });
+  const results: Array<{ org: string; lead: string; status: string }> = [];
 
+  // 2. Fetch all organizations
+  const orgsRepo = new OrganizationsRepository(supabaseAdmin);
+  const leadsRepo = new LeadsRepository(supabaseAdmin);
+  const messagesRepo = new MessagesRepository(supabaseAdmin);
+
+  const orgs = await orgsRepo.listAll();
+
+  if (!orgs || orgs.length === 0) {
+    logger.info('No organizations found for nudge cron');
+    return successResponse({ message: 'No organizations found', results: [] });
+  }
+
+  logger.info('Processing nudges for organizations', { count: orgs.length });
+
+  // 3. Process each organization
   for (const org of orgs) {
-      console.log(`[CRON] Processing Nudge for Org: ${org.name}`);
-      const systemPrompt = org.config?.system_prompt || SYSTEM_PROMPTS.SALES;
+    try {
+      logger.debug('Processing nudge for organization', {
+        orgId: org.id,
+        orgName: org.name,
+      });
 
-      // 2. Find Stale Leads for this Org
-      const threeDaysAgo = new Date();
-      threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+      // Get system prompt for this org
+      const orgConfig = org.config as Record<string, any> | null;
+      const systemPrompt =
+        orgConfig?.system_prompt || (SYSTEM_PROMPTS.SALES as string);
 
-      const { data: staleLeads } = await supabaseAdmin
-        .from('leads')
-        .select('*')
-        .eq('organization_id', org.id)
-        .lt('last_message_at', threeDaysAgo.toISOString())
-        .neq('status', 'closed')
-        .limit(5);
+      // 4. Find stale leads (no message in 3 days)
+      const staleLeads = await leadsRepo.getLeadsForNudge(org.id, 72); // 72 hours = 3 days
 
-      if (staleLeads) {
-          for (const lead of staleLeads) {
-               // 3. Generate Org-Specific Nudge
-               const completion = await openai.chat.completions.create({
-                  model: 'gpt-4o',
-                  messages: [
-                    { role: 'system', content: `You are an assistant for ${org.name}. ${systemPrompt}. The user hasn't replied in 3 days. Send a gentle, short bump message.` },
-                    { role: 'user', content: `Last status: ${lead.status}` }
-                  ]
-                });
-
-                const nudgeMessage = completion.choices[0].message.content;
-
-                // 4. Save & Send
-                await supabaseAdmin.from('messages').insert({
-                  organization_id: org.id,
-                  lead_id: lead.id,
-                  role: 'assistant',
-                  content: nudgeMessage
-                });
-                
-                await supabaseAdmin.from('leads').update({
-                  last_message_at: new Date().toISOString()
-                }).eq('id', lead.id);
-
-                console.log(`[NUDGE] Org: ${org.name} | Lead: ${lead.phone} | Msg: ${nudgeMessage}`);
-                results.push({ org: org.name, lead: lead.phone, status: 'nudged' });
-          }
+      if (!staleLeads || staleLeads.length === 0) {
+        logger.debug('No stale leads found for organization', {
+          orgId: org.id,
+        });
+        continue;
       }
+
+      logger.info('Found stale leads for nudge', {
+        orgId: org.id,
+        leadsCount: staleLeads.length,
+      });
+
+      // 5. Process each stale lead (limit to 5 per org)
+      const leadsToProcess = staleLeads.slice(0, 5);
+
+      for (const lead of leadsToProcess) {
+        try {
+          // Generate org-specific nudge message using AI processor
+          const nudgeMessage = await generateNudgeMessage(
+            org.name,
+            systemPrompt,
+            lead.status || 'new'
+          );
+
+          if (!nudgeMessage || nudgeMessage.trim() === '') {
+            logger.warn('Empty nudge message generated', {
+              orgId: org.id,
+              leadId: lead.id,
+            });
+            continue;
+          }
+
+          // Save nudge message to database
+          await messagesRepo.createMessage({
+            organizationId: org.id,
+            leadId: lead.id,
+            role: 'assistant',
+            content: nudgeMessage,
+          });
+
+          // Update lead's last message timestamp
+          await leadsRepo.updateLastMessageAt(lead.id);
+
+          logger.info('Nudge sent successfully', {
+            orgName: org.name,
+            leadPhone: lead.phone,
+            messageLength: nudgeMessage.length,
+          });
+
+          results.push({
+            org: org.name,
+            lead: lead.phone,
+            status: 'nudged',
+          });
+
+          // TODO: Send actual WhatsApp message via WAHA or WhatsApp Cloud API
+          // await sendNudgeMessage(org, lead, nudgeMessage);
+        } catch (error) {
+          logger.error('Failed to process nudge for lead', {
+            error,
+            orgId: org.id,
+            leadId: lead.id,
+          });
+          results.push({
+            org: org.name,
+            lead: lead.phone,
+            status: 'failed',
+          });
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to process nudges for organization', {
+        error,
+        orgId: org.id,
+      });
+    }
   }
 
-  return NextResponse.json({ results });
-}
+  logger.info('Nudge cron job completed', {
+    totalNudges: results.filter((r) => r.status === 'nudged').length,
+    totalFailed: results.filter((r) => r.status === 'failed').length,
+  });
+
+  return successResponse({ results });
+});

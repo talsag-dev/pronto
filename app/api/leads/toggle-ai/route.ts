@@ -1,35 +1,48 @@
-import { createClient } from '@supabase/supabase-js';
-import { NextResponse } from 'next/server';
+/**
+ * Toggle AI Status for Lead
+ * POST /api/leads/toggle-ai
+ *
+ * Toggles the AI assistant status (active/paused) for a specific lead.
+ */
 
-export async function POST(request: Request) {
-  try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    
-    const { leadId, status } = await request.json();
+import {
+  requireAuth,
+  successResponse,
+  withErrorHandler,
+  validateRequest,
+} from '@/lib/api';
+import { toggleAISchema } from '@/lib/api/schemas';
+import { LeadsRepository } from '@/lib/infrastructure/repositories';
+import { supabaseAdmin } from '@/lib/supabase';
 
-    if (!leadId || !status) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
+export const POST = withErrorHandler(async (request: Request) => {
+  // 1. Authenticate user
+  const user = await requireAuth();
 
-    if (!['active', 'paused'].includes(status)) {
-        return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
-    }
+  // 2. Validate request body
+  const { leadId, status } = await validateRequest(request, toggleAISchema);
 
-    const { error } = await supabase
-      .from('leads')
-      .update({ ai_status: status })
-      .eq('id', leadId);
+  // 3. Initialize repository
+  const leadsRepo = new LeadsRepository(supabaseAdmin);
 
-    if (error) {
-      throw error;
-    }
+  // 4. Verify lead exists and user has access
+  const lead = await leadsRepo.getByIdOrFail(leadId);
 
-    return NextResponse.json({ success: true });
-  } catch (error: any) {
-    console.error('Error toggling AI:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  // 5. Verify organization ownership
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('id')
+    .eq('id', lead.organization_id)
+    .eq('owner_id', user.id)
+    .single();
+
+  if (!org) {
+    throw new Error('Forbidden');
   }
-}
+
+  // 6. Toggle AI status
+  await leadsRepo.toggleAI(leadId, status);
+
+  // 7. Return success response
+  return successResponse({ success: true, leadId, status });
+});

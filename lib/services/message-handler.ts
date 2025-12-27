@@ -1,188 +1,235 @@
+/**
+ * Message Handler Service
+ *
+ * Handles incoming WhatsApp messages from Baileys worker.
+ * Manages lead creation, message deduplication, AI status, and response generation.
+ */
+
 import { supabaseAdmin } from '@/lib/supabase';
-import { openai } from '@/lib/ai/config';
-import { checkAvailability } from '@/lib/integrations/cal';
+import {
+  OrganizationsRepository,
+  LeadsRepository,
+  MessagesRepository,
+} from '@/lib/infrastructure/repositories';
+import { processMessageWithAI } from '@/lib/services/ai-processor';
 import { sendMessage } from '@/lib/integrations/baileys';
-import { SYSTEM_PROMPTS } from '@/lib/ai/agents';
-//   // Moved to worker to prevent loops
-//   console.log('[BAILEYS] Initialization moved to worker.');
-// }
+import { logger } from '@/lib/shared/utils';
 
 
 export async function handleIncomingMessage(
-  orgId: string, 
-  from: string, 
-  messageText: string, 
-  isFromMe: boolean = false, 
+  orgId: string,
+  from: string,
+  messageText: string,
+  isFromMe: boolean = false,
   name: string = '',
   whatsappMessageId?: string,
   senderPn?: string
 ) {
   try {
-    // Get organization
-    const { data: org } = await supabaseAdmin
-      .from('organizations')
-      .select('*')
-      .eq('id', orgId)
-      .single();
-
-    if (!org) return;
-
-    // Clean phone number (remove @s.whatsapp.net or @lid)
-    const phoneNumber = from.split('@')[0];
-    const realPhone = senderPn ? senderPn.split('@')[0] : null;
-
-    // Find or Create Lead
-    let { data: lead } = await supabaseAdmin
-      .from('leads')
-      .select('*')
-      .eq('organization_id', org.id)
-      .eq('phone', phoneNumber)
-      .single();
-
-    if (!lead) {
-      // If message is from ME, and no lead exists, maybe we should create one? 
-      // Or maybe not? For now, let's create it to track the conversation.
-      const { data: newLead } = await supabaseAdmin
-        .from('leads')
-        .insert({
-          organization_id: org.id,
-          phone: phoneNumber,
-          status: 'new',
-          ai_status: isFromMe ? 'paused' : 'active', // If we started it, maybe keep it active? Or paused?
-          name: name || undefined // Save name if available
-          // If business OWNER starts chat, they probably want to handle it.
-        })
-        .select()
-        .single();
-      lead = newLead;
-    } else {
-        // If From Me, PAUSE AI
-        if (isFromMe && lead.ai_status !== 'paused') {
-            console.log(`[BAILEYS] Human reply detected for lead ${lead.id}. Pausing AI.`);
-            await supabaseAdmin.from('leads').update({ ai_status: 'paused' }).eq('id', lead.id);
-            lead.ai_status = 'paused'; // Update local object
-        }
-
-        if (name && lead.name !== name) {
-            await supabaseAdmin.from('leads').update({ name }).eq('id', lead.id);
-            lead.name = name;
-        }
-
-        // Update real_phone if available and missing/different
-        if (realPhone && lead.real_phone !== realPhone) {
-            console.log(`[BAILEYS] Mapping LID ${phoneNumber} to phone ${realPhone}`);
-            await supabaseAdmin.from('leads').update({ real_phone: realPhone }).eq('id', lead.id);
-            lead.real_phone = realPhone;
-        }
-    }
-    // 3. Deduplication: Check if this message already exists
-    if (whatsappMessageId) {
-      const { data: existing } = await supabaseAdmin
-        .from('messages')
-        .select('id')
-        .eq('whatsapp_message_id', whatsappMessageId)
-        .single();
-        
-      if (existing) {
-        console.log(`[BAILEYS] Duplicate message skipped: ${whatsappMessageId}`);
-        return;
-      }
-    }
-
-    // 4. Save message
-    await supabaseAdmin.from('messages').insert({
-      organization_id: org.id,
-      lead_id: lead.id,
-      role: isFromMe ? 'assistant' : 'user', // isFromMe = assistant (business), else user
-      content: messageText,
-      type: 'text',
-      whatsapp_message_id: whatsappMessageId
+    logger.info('Processing incoming message', {
+      orgId,
+      from,
+      isFromMe,
+      hasName: !!name,
+      hasWhatsappId: !!whatsappMessageId,
     });
 
-    // If message is from ME, stop here (we don't want AI to reply to me/business owner)
-    if (isFromMe) {
-        return;
-    }
+    // 1. Initialize repositories
+    const orgsRepo = new OrganizationsRepository(supabaseAdmin);
+    const leadsRepo = new LeadsRepository(supabaseAdmin);
+    const messagesRepo = new MessagesRepository(supabaseAdmin);
 
-    // CHECK AI STATUS: If paused, stop here.
-    if (lead.ai_status === 'paused') {
-      console.log(`[BAILEYS] AI is paused for lead ${lead.id} (${phoneNumber}). Skipping AI response.`);
+    // 2. Get organization
+    const org = await orgsRepo.getById(orgId);
+
+    if (!org) {
+      logger.warn('Organization not found', { orgId });
       return;
     }
 
-    // Get conversation history
-    const { data: history } = await supabaseAdmin
-      .from('messages')
-      .select('role, content')
-      .eq('lead_id', lead.id)
-      .order('created_at', { ascending: true })
-      .limit(20);
+    // 3. Clean phone numbers (remove WhatsApp suffixes)
+    const phoneNumber = from.split('@')[0];
+    const realPhone = senderPn ? senderPn.split('@')[0] : null;
 
-    // AI Processing
-    const systemPrompt = org.config?.system_prompt || SYSTEM_PROMPTS.SALES;
-    const calAccessToken = org.cal_access_token || org.integrations?.cal_api_key;
-
-    const tools = [
-      {
-        type: 'function',
-        function: {
-          name: 'check_availability',
-          description: 'Check calendar availability',
-          parameters: {
-            type: 'object',
-            properties: {
-              startTime: { type: 'string' },
-              endTime: { type: 'string' }
-            },
-            required: ['startTime', 'endTime']
-          }
-        }
-      }
-    ];
-
-    const messages: any[] = [
-      { role: 'system', content: systemPrompt },
-      ...(history || []).map((m: any) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: messageText }
-    ];
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: messages as any,
-      tools: tools as any,
-      tool_choice: 'auto'
+    logger.debug('Phone numbers parsed', {
+      from,
+      phoneNumber,
+      realPhone,
     });
 
-    const aiMessage = response.choices[0].message;
-    let finalResponse = aiMessage.content;
+    // 4. Find or Create Lead
+    let lead = await leadsRepo.findByPhone(org.id, phoneNumber);
 
-    // Handle tool calls
-    if (aiMessage.tool_calls) {
-      for (const toolCall of aiMessage.tool_calls) {
-        const tc = toolCall as any;
-        if (tc.function?.name === 'check_availability') {
-          const args = JSON.parse(tc.function.arguments);
-          const result = await checkAvailability(args.startTime, args.endTime, calAccessToken);
-          finalResponse = `Based on the calendar: ${JSON.stringify(result)}`;
-        }
+    if (!lead) {
+      // Create new lead - if message is from business owner, pause AI
+      lead = await leadsRepo.createLead({
+        organizationId: org.id,
+        phone: phoneNumber,
+        name: name || undefined,
+      });
+
+      // If business owner starts the chat, pause AI (they want to handle it manually)
+      if (isFromMe) {
+        lead = await leadsRepo.updateLead(lead.id, { aiStatus: 'paused' });
+      }
+
+      logger.info('New lead created from message', {
+        leadId: lead.id,
+        phone: phoneNumber,
+        aiStatus: lead.ai_status,
+        isFromMe,
+      });
+    } else {
+      // Existing lead - handle updates
+      const updates: any = {};
+
+      // If message is from business owner, pause AI (human takeover)
+      if (isFromMe && lead.ai_status !== 'paused') {
+        updates.aiStatus = 'paused';
+        logger.info('Human reply detected - pausing AI', {
+          leadId: lead.id,
+          phone: phoneNumber,
+        });
+      }
+
+      // Update name if provided and different
+      if (name && lead.name !== name) {
+        updates.name = name;
+        logger.debug('Updating lead name', { leadId: lead.id, name });
+      }
+
+      // Apply updates if any
+      if (Object.keys(updates).length > 0) {
+        lead = await leadsRepo.updateLead(lead.id, updates);
+      }
+
+      // Update real_phone if available (LID to phone number mapping)
+      if (realPhone && lead.real_phone !== realPhone) {
+        logger.info('Mapping LID to real phone', {
+          leadId: lead.id,
+          lid: phoneNumber,
+          realPhone,
+        });
+        // Note: real_phone not in UpdateLeadParams - would need direct update
+        await supabaseAdmin
+          .from('leads')
+          .update({ real_phone: realPhone })
+          .eq('id', lead.id);
+        lead.real_phone = realPhone;
+      }
+    }
+    // 5. Deduplication: Check if message already exists
+    if (whatsappMessageId) {
+      const existingMessage = await messagesRepo.findByWhatsAppId(
+        whatsappMessageId
+      );
+
+      if (existingMessage) {
+        logger.debug('Duplicate message skipped', {
+          whatsappMessageId,
+          leadId: lead.id,
+        });
+        return;
       }
     }
 
-    // Save AI response
-    if (finalResponse) {
-      await supabaseAdmin.from('messages').insert({
-        organization_id: org.id,
-        lead_id: lead.id,
+    // 6. Save incoming message
+    await messagesRepo.createMessage({
+      organizationId: org.id,
+      leadId: lead.id,
+      role: isFromMe ? 'assistant' : 'user', // isFromMe = business owner (assistant), else lead (user)
+      content: messageText,
+      type: 'text',
+      whatsappMessageId: whatsappMessageId,
+    });
+
+    logger.debug('Message saved', {
+      leadId: lead.id,
+      role: isFromMe ? 'assistant' : 'user',
+      length: messageText.length,
+    });
+
+    // 7. Early exit conditions: Don't generate AI response if...
+
+    // If message is from business owner, stop here (we don't reply to ourselves)
+    if (isFromMe) {
+      logger.debug('Message from business owner - no AI response', {
+        leadId: lead.id,
+      });
+      return;
+    }
+
+    // If AI is paused for this lead, stop here (human is handling it)
+    if (lead.ai_status === 'paused') {
+      logger.info('AI paused for lead - no AI response', {
+        leadId: lead.id,
+        phone: phoneNumber,
+      });
+      return;
+    }
+
+    // 8. Get conversation history for AI context
+    const messages = await messagesRepo.getConversationHistory(lead.id, {
+      limit: 20,
+      includeSystem: false,
+    });
+
+    const conversationHistory = messages
+      .filter((m) => m.content !== null)
+      .map((m) => ({
+        role: m.role,
+        content: m.content as string,
+      }));
+
+    logger.debug('Conversation history loaded', {
+      leadId: lead.id,
+      messageCount: conversationHistory.length,
+    });
+
+    // 9. Process message with AI
+    const orgConfig = org.config as Record<string, any> | null;
+    const orgIntegrations = org.integrations as Record<string, any> | null;
+
+    const aiResult = await processMessageWithAI({
+      organizationId: org.id,
+      organizationName: org.name,
+      systemPrompt: orgConfig?.system_prompt,
+      calAccessToken: org.cal_access_token || orgIntegrations?.cal_api_key,
+      conversationHistory,
+      userMessage: messageText,
+    });
+
+    // 10. Save and send AI response
+    if (aiResult.response) {
+      // Save AI response to database
+      await messagesRepo.createMessage({
+        organizationId: org.id,
+        leadId: lead.id,
         role: 'assistant',
-        content: finalResponse,
-        whatsapp_message_id: `ai-${Date.now()}` // Temporary ID to prevent double-save from webhook loop
+        content: aiResult.response,
+        whatsappMessageId: `ai-${Date.now()}`, // Temporary ID to prevent double-save from webhook loop
       });
 
-      // Send via Baileys
-      await sendMessage(org.id, from, finalResponse);
-      console.log(`[BAILEYS] Sent: ${finalResponse}`);
+      // Send response via Baileys
+      await sendMessage(org.id, from, aiResult.response);
+
+      logger.info('AI response sent via Baileys', {
+        leadId: lead.id,
+        phone: phoneNumber,
+        responseLength: aiResult.response.length,
+        hadToolCalls: !!aiResult.toolCalls,
+      });
+    } else {
+      logger.warn('AI generated empty response', {
+        leadId: lead.id,
+        phone: phoneNumber,
+      });
     }
   } catch (error) {
-    console.error('[BAILEYS MESSAGE HANDLER ERROR]:', error);
+    logger.error('Message handler error', {
+      error,
+      orgId,
+      from,
+    });
   }
 }

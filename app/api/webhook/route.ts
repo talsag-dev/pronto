@@ -1,178 +1,178 @@
-import { NextResponse } from 'next/server';
+/**
+ * WAHA Webhook
+ * POST /api/webhook
+ *
+ * Receives WhatsApp messages from WAHA (WhatsApp HTTP API) service.
+ * Handles multi-tenant organization lookup, lead management, and AI processing.
+ */
+
+import { z } from 'zod';
+import { successResponse, withErrorHandler } from '@/lib/api';
 import { supabaseAdmin } from '@/lib/supabase';
-import { openai } from '@/lib/ai/config';
-import { checkAvailability } from '@/lib/integrations/cal';
-import { SYSTEM_PROMPTS } from '@/lib/ai/agents';
+import {
+  OrganizationsRepository,
+  LeadsRepository,
+  MessagesRepository,
+} from '@/lib/infrastructure/repositories';
+import { processMessageWithAI } from '@/lib/services/ai-processor';
+import { logger } from '@/lib/shared/utils';
 
-// Type definitions for Waha payload
-type WahaPayload = {
-  session: string; // Waha Session Name
-  payload: {
-    from: string; // The sender (Lead)
-    to: string; // The receiver (Business Phone / Waha Session)
-    body: string;
-    hasMedia?: boolean;
-    media?: {
-      url: string;
-      mimetype: string;
-    };
-  };
-};
+// Zod schema for WAHA webhook payload
+const wahaWebhookSchema = z.object({
+  session: z.string().min(1, 'Session is required'),
+  payload: z.object({
+    from: z.string().min(1, 'Sender phone is required'),
+    to: z.string().min(1, 'Receiver phone is required'),
+    body: z.string(),
+    hasMedia: z.boolean().optional(),
+    media: z
+      .object({
+        url: z.string().url(),
+        mimetype: z.string(),
+      })
+      .optional(),
+  }),
+});
 
-export async function POST(request: Request) {
-  try {
-    const body: WahaPayload = await request.json();
-    const { session } = body;
-    const { from: leadPhone, to: businessPhone, body: text, hasMedia, media } = body.payload;
+export const maxDuration = 60; // Allow 60s timeout for long-running AI processing
 
-    console.log(`[WEBHOOK] Session: ${session} | Business: ${businessPhone} | Lead: ${leadPhone} | Msg: ${text || 'Media'}`);
+export const POST = withErrorHandler(async (request: Request) => {
+  // 1. Parse and validate request body
+  const body = await request.json();
+  const validation = wahaWebhookSchema.safeParse(body);
 
-    // 1. Identify Organization (Multi-Tenant Lookup)
-    let org;
-
-    // Strategy A: Session Name (Preferred)
-    if (session && session.startsWith('org_')) {
-        const orgId = session.split('org_')[1];
-        const { data } = await supabaseAdmin
-          .from('organizations')
-          .select('*')
-          .eq('id', orgId)
-          .single();
-        org = data;
-    }
-
-    // Strategy B: Business Phone (Fallback)
-    if (!org) {
-        const cleanBusinessPhone = businessPhone.split('@')[0];
-        const { data } = await supabaseAdmin
-          .from('organizations')
-          .select('*')
-          .eq('business_phone', cleanBusinessPhone)
-          .single();
-        org = data;
-    }
-
-    if (!org) {
-      console.warn(`[WEBHOOK] Ignored: No organization found for session ${session} or phone ${businessPhone}`);
-      return NextResponse.json({ ignored: true });
-    }
-
-    // 2. Identify Lead within that Org
-    let { data: lead } = await supabaseAdmin
-      .from('leads')
-      .select('*')
-      .eq('organization_id', org.id)
-      .eq('phone', leadPhone)
-      .single();
-
-    let history: any[] = [];
-
-    if (!lead) {
-      // New Lead for this Org
-      const { data: newLead, error } = await supabaseAdmin
-        .from('leads')
-        .insert({ 
-            organization_id: org.id,
-            phone: leadPhone, 
-            status: 'new' 
-        })
-        .select()
-        .single();
-      
-      if (error) throw error;
-      lead = newLead;
-    } else {
-      // Fetch History
-      const { data: msgs } = await supabaseAdmin
-        .from('messages')
-        .select('role, content')
-        .eq('lead_id', lead.id)
-        .order('created_at', { ascending: true })
-        .limit(20);
-        
-      if (msgs) history = msgs;
-    }
-
-    // 3. Process Input
-    let userMessage = text;
-    if (hasMedia && media?.mimetype.startsWith('audio')) {
-      userMessage = "[Audio Note] (Transcription simulation)";
-    }
-
-    // 4. Save User Message
-    await supabaseAdmin.from('messages').insert({
-      organization_id: org.id,
-      lead_id: lead.id,
-      role: 'user',
-      content: userMessage,
-      type: hasMedia ? 'audio' : 'text'
+  if (!validation.success) {
+    logger.warn('WAHA webhook validation failed', {
+      errors: validation.error.issues,
     });
-
-    // 5. AI Processing (Dynamic Context)
-    // Load System Prompt from Org Config or Fallback
-    const orgConfig = org.config || {};
-    const systemPrompt = orgConfig.system_prompt || SYSTEM_PROMPTS.SALES;
-    
-    // Load Integrations
-    // Hybrid Auth: Try OAuth Token first, fallback to manual API Key
-    const integrations = org.integrations || {};
-    const calAccessToken = org.cal_access_token || integrations.cal_api_key;
-
-    const tools = [
-      {
-        type: 'function',
-        function: {
-          name: 'check_availability',
-          description: 'Check calendar availability',
-          parameters: {
-            type: 'object',
-            properties: {
-              startTime: { type: 'string' },
-              endTime: { type: 'string' }
-            },
-            required: ['startTime', 'endTime']
-          }
-        }
-      }
-    ];
-
-    const messages: any[] = [
-      { role: 'system', content: systemPrompt },
-      ...history.map((m: any) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: userMessage }
-    ];
-
-    const runner = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: messages as any,
-      tools: tools as any,
-      tool_choice: 'auto'
-    });
-
-    const msg = runner.choices[0].message;
-    let finalResponse = msg.content;
-
-    // Handle Tool Calls (Simplified for MVP)
-    if (msg.tool_calls) {
-        // ... Logic same as before, but potentially pass calApiKey to checkAvailability
-    }
-
-    // 6. Save & Send Response
-    if (finalResponse) {
-      await supabaseAdmin.from('messages').insert({
-        organization_id: org.id,
-        lead_id: lead.id,
-        role: 'assistant',
-        content: finalResponse
-      });
-      // Send via Waha...
-      console.log(`[AI REPLY] Org: ${org.name} | To: ${leadPhone} | Msg: ${finalResponse}`);
-    }
-
-    return NextResponse.json({ success: true });
-
-  } catch (error) {
-    console.error('Webhook Error:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return successResponse({ ignored: true, reason: 'Invalid payload' });
   }
-}
+
+  const { session, payload } = validation.data;
+  const { from: leadPhone, to: businessPhone, body: text, hasMedia, media } = payload;
+
+  logger.info('WAHA webhook received', {
+    session,
+    businessPhone,
+    leadPhone,
+    hasText: !!text,
+    hasMedia: !!hasMedia,
+  });
+
+  // 2. Identify Organization (Multi-Tenant Lookup)
+  const orgsRepo = new OrganizationsRepository(supabaseAdmin);
+  let org = null;
+
+  // Strategy A: Session Name (Preferred - format: "org_<orgId>")
+  if (session.startsWith('org_')) {
+    const orgId = session.split('org_')[1];
+    org = await orgsRepo.getById(orgId);
+    logger.debug('Organization lookup by session', { orgId, found: !!org });
+  }
+
+  // Strategy B: Business Phone (Fallback)
+  if (!org) {
+    const cleanBusinessPhone = businessPhone.split('@')[0];
+    org = await orgsRepo.getByBusinessPhone(cleanBusinessPhone);
+    logger.debug('Organization lookup by phone', {
+      businessPhone: cleanBusinessPhone,
+      found: !!org,
+    });
+  }
+
+  if (!org) {
+    logger.warn('WAHA webhook ignored - no organization found', {
+      session,
+      businessPhone,
+    });
+    return successResponse({ ignored: true, reason: 'No organization found' });
+  }
+
+  // 3. Find or Create Lead
+  const leadsRepo = new LeadsRepository(supabaseAdmin);
+  const messagesRepo = new MessagesRepository(supabaseAdmin);
+
+  let lead = await leadsRepo.findByPhone(org.id, leadPhone);
+  let history: Array<{ role: string; content: string }> = [];
+
+  if (!lead) {
+    // New lead - create it
+    lead = await leadsRepo.createLead({
+      organizationId: org.id,
+      phone: leadPhone,
+    });
+    logger.info('New lead created for WAHA message', {
+      leadId: lead.id,
+      orgId: org.id,
+      phone: leadPhone,
+    });
+  } else {
+    // Existing lead - fetch conversation history
+    const messages = await messagesRepo.getConversationHistory(lead.id, {
+      limit: 20,
+      includeSystem: false,
+    });
+    history = messages
+      .filter((m) => m.content !== null)
+      .map((m) => ({
+        role: m.role,
+        content: m.content as string,
+      }));
+    logger.debug('Fetched conversation history', {
+      leadId: lead.id,
+      messageCount: history.length,
+    });
+  }
+
+  // 4. Process Input Message
+  let userMessage = text || '';
+  if (hasMedia && media?.mimetype.startsWith('audio')) {
+    userMessage = '[Audio Note] (Transcription simulation)';
+    logger.debug('Audio message detected', { mimetype: media.mimetype });
+  }
+
+  // 5. Save User Message
+  await messagesRepo.createMessage({
+    organizationId: org.id,
+    leadId: lead.id,
+    role: 'user',
+    content: userMessage,
+    type: hasMedia ? 'audio' : 'text',
+  });
+
+  // 6. Process message with AI
+  const orgConfig = org.config as Record<string, any> | null;
+  const orgIntegrations = org.integrations as Record<string, any> | null;
+
+  const aiResult = await processMessageWithAI({
+    organizationId: org.id,
+    organizationName: org.name,
+    systemPrompt: orgConfig?.system_prompt,
+    calAccessToken: org.cal_access_token || orgIntegrations?.cal_api_key,
+    conversationHistory: history,
+    userMessage,
+  });
+
+  // 7. Save & Send AI Response
+  if (aiResult.response) {
+    await messagesRepo.createMessage({
+      organizationId: org.id,
+      leadId: lead.id,
+      role: 'assistant',
+      content: aiResult.response,
+    });
+
+    logger.info('WAHA AI response generated', {
+      orgId: org.id,
+      orgName: org.name,
+      leadPhone,
+      responseLength: aiResult.response.length,
+      hadToolCalls: !!aiResult.toolCalls,
+    });
+
+    // TODO: Send response via WAHA API
+    // await sendWahaMessage(session, leadPhone, aiResult.response);
+  }
+
+  return successResponse({ success: true });
+});

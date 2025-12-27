@@ -1,52 +1,55 @@
-import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
-import { NextResponse } from 'next/server';
+/**
+ * WhatsApp Connection Status
+ * GET /api/whatsapp/status
+ *
+ * Returns the WhatsApp connection status for the user's organization.
+ * Checks if a phone ID is configured (indicates connection).
+ */
+
+import {
+  requireAuth,
+  successResponse,
+  withErrorHandler,
+} from '@/lib/api';
+import { OrganizationsRepository } from '@/lib/infrastructure/repositories';
 import { supabaseAdmin } from '@/lib/supabase';
+import { logger } from '@/lib/shared/utils';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
-  try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() { return cookieStore.getAll(); },
-          setAll(cookiesToSet) {
-             try {
-                cookiesToSet.forEach(({ name, value, options }) =>
-                   cookieStore.set(name, value, options)
-                );
-             } catch {}
-          },
-        },
-      }
-    );
+export const GET = withErrorHandler(async (request: Request) => {
+  // 1. Authenticate user
+  const user = await requireAuth();
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ connected: false, error: 'Unauthorized' }, { status: 401 });
-    }
-    
-    const { data: org } = await supabaseAdmin
-      .from('organizations')
-      .select('id, whatsapp_phone_number, whatsapp_phone_id')
-      .eq('owner_id', user.id)
-      .single();
+  // 2. Initialize repository
+  const orgsRepo = new OrganizationsRepository(supabaseAdmin);
 
-    if (!org) {
-      return NextResponse.json({ connected: false });
-    }
+  // 3. Get user's organization
+  const org = await orgsRepo.getByOwnerId(user.id);
 
-    return NextResponse.json({
-      connected: !!org.whatsapp_phone_id,
-      phoneNumber: org.whatsapp_phone_number,
-      orgId: org.id
+  if (!org) {
+    logger.warn('User has no organization', { userId: user.id });
+    return successResponse({
+      connected: false,
+      phoneNumber: null,
+      orgId: null,
     });
-
-  } catch (error) {
-    return NextResponse.json({ connected: false, error: 'Failed to fetch status' });
   }
-}
+
+  // 4. Check connection status (using whatsapp_status field)
+  const connected = org.whatsapp_status === 'connected';
+
+  logger.info('WhatsApp status checked', {
+    userId: user.id,
+    orgId: org.id,
+    connected,
+    status: org.whatsapp_status,
+  });
+
+  // 5. Return status
+  return successResponse({
+    connected,
+    phoneNumber: org.business_phone,
+    orgId: org.id,
+  });
+});

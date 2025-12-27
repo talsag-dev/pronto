@@ -1,46 +1,39 @@
+/**
+ * Check Admin Authorization
+ * GET /api/admin/check-auth
+ *
+ * Checks if the currently authenticated user has admin privileges.
+ * Returns { authorized: boolean } without throwing errors.
+ */
+
+import { getAuthenticatedUser, isAdmin } from '@/lib/api';
 import { NextResponse } from 'next/server';
-import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
+import { logger } from '@/lib/shared/utils';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {}
-          },
-        },
-      }
-    );
-
-    const { data: { user } } = await supabase.auth.getUser();
+    // 1. Get authenticated user (don't throw if not authenticated)
+    const user = await getAuthenticatedUser();
 
     if (!user) {
       return NextResponse.json({ authorized: false });
     }
 
-    // Check if user email matches admin email from env
-    const adminEmail = process.env.ADMIN_EMAIL || 'talsagie19@gmail.com';
-    const authorized = user.email === adminEmail;
+    // 2. Check if user is admin
+    const authorized = isAdmin(user);
 
-    console.log(`[ADMIN AUTH] User ${user.email} - Authorized: ${authorized}`);
+    logger.info('Admin authorization check', {
+      userId: user.id,
+      email: user.email,
+      authorized,
+    });
 
+    // 3. Return authorization status
     return NextResponse.json({ authorized });
   } catch (error) {
-    console.error('[ADMIN AUTH] Error:', error);
+    logger.error('Admin authorization check failed', { error });
     return NextResponse.json({ authorized: false });
   }
 }

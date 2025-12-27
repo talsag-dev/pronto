@@ -1,70 +1,65 @@
-import { NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/lib/supabase';
-import { getQRCode, ensureWorkerSession } from '@/lib/integrations/baileys';
-import { handleIncomingMessage } from '@/lib/services/message-handler';
-import QRCode from 'qrcode';
+/**
+ * WhatsApp QR Code (Baileys)
+ * GET /api/whatsapp/qr-baileys
+ *
+ * Generates a QR code for WhatsApp authentication using Baileys library.
+ * Ensures worker session is initialized and returns QR code as data URL.
+ */
 
-import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
+import {
+  requireAuth,
+  successResponse,
+  withErrorHandler,
+  commonErrors,
+} from '@/lib/api';
+import { getQRCode, ensureWorkerSession } from '@/lib/integrations/baileys';
+import { OrganizationsRepository } from '@/lib/infrastructure/repositories';
+import { supabaseAdmin } from '@/lib/supabase';
+import { logger } from '@/lib/shared/utils';
+import QRCode from 'qrcode';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
-  try {
-    // 1. Authenticate
-    const cookieStore = await cookies();
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() { return cookieStore.getAll(); },
-          setAll(cookiesToSet) {
-             try {
-                cookiesToSet.forEach(({ name, value, options }) =>
-                   cookieStore.set(name, value, options)
-                );
-             } catch {}
-          },
-        },
-      }
-    );
+export const GET = withErrorHandler(async (request: Request) => {
+  // 1. Authenticate user
+  const user = await requireAuth();
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  // 2. Initialize repository
+  const orgsRepo = new OrganizationsRepository(supabaseAdmin);
 
-    // 2. Get User's Organization
-    const { data: org } = await supabaseAdmin
-      .from('organizations')
-      .select('*')
-      .eq('owner_id', user.id)
-      .single();
+  // 3. Get user's organization
+  const org = await orgsRepo.getByOwnerId(user.id);
 
-    if (!org) return NextResponse.json({ error: 'No Org' }, { status: 404 });
-
-    const orgId = org.id;
-
-    // Ensure session is initialized on worker
-    await ensureWorkerSession(orgId);
-
-    // Get QR data from Baileys (Worker already returns Data URL)
-    const qrData = await getQRCode(orgId);
-    
-    if (!qrData) {
-      return NextResponse.json({ error: 'No QR code available' }, { status: 404 });
-    }
-
-    // Convert to base64 image ONLY if it's not already a data URL 
-    // (Prevents "data too big" error when worker already converted it)
-    const qrImage = qrData.startsWith('data:image') 
-      ? qrData 
-      : await QRCode.toDataURL(qrData);
-    
-    return NextResponse.json({ qr: qrImage });
-  } catch (error: any) {
-    console.error('[QR ERROR]:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!org) {
+    throw new Error('Organization not found');
   }
-}
+
+  // 4. Ensure session is initialized on worker
+  await ensureWorkerSession(org.id);
+
+  logger.info('Baileys worker session ensured', {
+    userId: user.id,
+    orgId: org.id,
+  });
+
+  // 5. Get QR data from Baileys (Worker already returns Data URL)
+  const qrData = await getQRCode(org.id);
+
+  if (!qrData) {
+    return commonErrors.notFound('QR code');
+  }
+
+  // 6. Convert to base64 image ONLY if it's not already a data URL
+  // (Prevents "data too big" error when worker already converted it)
+  const qrImage = qrData.startsWith('data:image')
+    ? qrData
+    : await QRCode.toDataURL(qrData);
+
+  logger.info('QR code generated', {
+    userId: user.id,
+    orgId: org.id,
+  });
+
+  // 7. Return QR code
+  return successResponse({ qr: qrImage });
+});
